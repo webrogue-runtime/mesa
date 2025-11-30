@@ -852,6 +852,8 @@ custom_decodes = {
     "vkGetDeviceImageMemoryRequirements" : emit_global_state_wrapped_decoding,
     "vkGetDeviceImageMemoryRequirementsKHR" : emit_global_state_wrapped_decoding,
 
+    # Webrogue-specific
+    "vkGetSwapchainImagesKHR" : emit_global_state_wrapped_decoding,
 }
 
 class VulkanDecoder(VulkanWrapperGenerator):

@@ -263,7 +263,8 @@ int32_t GfxStreamVulkanMapper::map(struct VulkanMapperData* mapData) {
     };
 #endif
 
-    mai.pNext = reinterpret_cast<void*>(&importInfo);
+    abort();
+    // mai.pNext = reinterpret_cast<void*>(&importInfo);
 
     VkResult result = mVk.AllocateMemory(mDevice, &mai, nullptr, &mapData->memory);
     if (result != VK_SUCCESS) {

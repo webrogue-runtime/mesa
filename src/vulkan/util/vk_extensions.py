@@ -1,6 +1,7 @@
 import copy
 import re
 import xml.etree.ElementTree as et
+from itertools import chain
 
 def get_api_list(s):
     apis = []

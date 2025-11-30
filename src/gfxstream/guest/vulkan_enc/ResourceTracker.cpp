@@ -4,6 +4,7 @@
  */
 
 #include "ResourceTracker.h"
+#include <cassert>
 
 #include "CommandBufferStagingStream.h"
 #include "DescriptorSetVirtualization.h"
@@ -639,7 +640,7 @@ VkResult addImageBufferCollectionConstraintsFUCHSIA(
         auto pixel_format = vkFormatTypeToSysmem(createInfo->format);
         if (pixel_format == fuchsia_sysmem::wire::PixelFormatType::kInvalid) {
             mesa_logd("%s: Unsupported VkFormat %u", __func__,
-                  static_cast<uint32_t>(createInfo->format));
+                      static_cast<uint32_t>(createInfo->format));
             return VK_ERROR_FORMAT_NOT_SUPPORTED;
         }
         imageConstraints.pixel_format.type = pixel_format;
@@ -793,6 +794,8 @@ void ResourceTracker::EmitGuestAndHostTraceMarker(VkEncoder* encoder) {
 }
 
 static VkResult acquireSync(uint64_t syncId, int64_t& osHandle) {
+    abort();
+#if 0
     struct VirtGpuExecBuffer exec = {};
     struct gfxstreamAcquireSync acquireSync = {};
     VirtGpuDevice* instance = VirtGpuDevice::getInstance();
@@ -808,9 +811,12 @@ static VkResult acquireSync(uint64_t syncId, int64_t& osHandle) {
 
     osHandle = exec.handle.osHandle;
     return VK_SUCCESS;
+#endif
 }
 
 static VkResult createFence(VkDevice device, uint64_t hostFenceHandle, int64_t& osHandle) {
+    abort();
+#if 0
     struct VirtGpuExecBuffer exec = {};
     struct gfxstreamCreateExportSyncVK exportSync = {};
     VirtGpuDevice* instance = VirtGpuDevice::getInstance();
@@ -830,6 +836,7 @@ static VkResult createFence(VkDevice device, uint64_t hostFenceHandle, int64_t& 
 
     osHandle = exec.handle.osHandle;
     return VK_SUCCESS;
+#endif
 }
 
 static void collectAllPendingDescriptorSetsBottomUp(const std::vector<VkCommandBuffer>& workingSet,
@@ -1460,8 +1467,7 @@ void ResourceTracker::setupCaps(uint32_t& noRenderControlEnc) {
         mFeatureInfo.hasVulkanCreateResourcesWithRequirements = true;
         mFeatureInfo.hasVirtioGpuNext = true;
         mFeatureInfo.hasVirtioGpuNativeSync = true;
-        mFeatureInfo.hasVulkanBatchedDescriptorSetUpdate =
-            mCaps.vulkanCapset.vulkanBatchedDescriptorSetUpdate;
+        mFeatureInfo.hasVulkanBatchedDescriptorSetUpdate = false; // TODO ?
         mFeatureInfo.hasVulkanAsyncQsri = true;
 
         ResourceTracker::streamFeatureBits |= VULKAN_STREAM_FEATURE_NULL_OPTIONAL_STRINGS_BIT;
@@ -1470,7 +1476,7 @@ void ResourceTracker::setupCaps(uint32_t& noRenderControlEnc) {
         ResourceTracker::streamFeatureBits |= VULKAN_STREAM_FEATURE_QUEUE_SUBMIT_WITH_COMMANDS_BIT;
     }
 
-    noRenderControlEnc = mCaps.vulkanCapset.noRenderControlEnc;
+    noRenderControlEnc = 1;
 }
 
 void ResourceTracker::setupFeatures(const struct GfxStreamVkFeatureInfo* features) {
@@ -1541,9 +1547,9 @@ void ResourceTracker::setupPlatformHelpers() {
     }
 #endif
 
-    if (mSyncHelper == nullptr) {
-        mSyncHelper.reset(gfxstream::createPlatformSyncHelper());
-    }
+    // if (mSyncHelper == nullptr) {
+    //     mSyncHelper.reset(gfxstream::createPlatformSyncHelper());
+    // }
 }
 
 void ResourceTracker::setThreadingCallbacks(const ResourceTracker::ThreadingCallbacks& callbacks) {
@@ -2013,9 +2019,9 @@ VkResult ResourceTracker::on_vkEnumerateDeviceExtensionProperties(
                                    filteredExts.end(),
                                    [](const VkExtensionProperties& a,
                                       const VkExtensionProperties& b) {
-                                       return strcmp(a.extensionName, b.extensionName) == 0;
-                                   }),
-                       filteredExts.end());
+                        return strcmp(a.extensionName, b.extensionName) == 0;
+                    }),
+        filteredExts.end());
 
     // Spec:
     //
@@ -2211,7 +2217,11 @@ void ResourceTracker::on_vkGetPhysicalDeviceProperties2(void* context,
 
     // Note: VirtGpuDevice::getInstance() will return null for Goldfish, as it
     // does not have the virtio-gpu interface that is expected.
+#if 1
+    VirtGpuDevice* instance = nullptr;
+#else
     VirtGpuDevice* instance = VirtGpuDevice::getInstance();
+#endif
 
     const char* transport_name = instance ? "Virtio-GPU GFXStream" : "Goldfish GFXStream";
 
@@ -3111,29 +3121,31 @@ CoherentMemoryPtr ResourceTracker::createCoherentMemory(
                 return coherentMemory;
             }
             {
-                std::lock_guard<std::recursive_mutex> lock(mLock);
-                VirtGpuDevice* instance = VirtGpuDevice::getInstance((enum VirtGpuCapset)3);
-                createBlob.blobMem = kBlobMemHost3d;
-                createBlob.flags = kBlobFlagMappable;
-                createBlob.blobId = hvaSizeId[2];
-                createBlob.size = hostAllocationInfo.allocationSize;
+                abort();
+                // std::lock_guard<std::recursive_mutex> lock(mLock);
+                // #error e2
+                // VirtGpuDevice* instance = VirtGpuDevice::getInstance((enum VirtGpuCapset)3);
+                // createBlob.blobMem = kBlobMemHost3d;
+                // createBlob.flags = kBlobFlagMappable;
+                // createBlob.blobId = hvaSizeId[2];
+                // createBlob.size = hostAllocationInfo.allocationSize;
 
-                auto blob = instance->createBlob(createBlob);
-                if (!blob) {
-                    mesa_loge("Failed to create coherent memory: failed to create blob.");
-                    res = VK_ERROR_OUT_OF_DEVICE_MEMORY;
-                    return coherentMemory;
-                }
+                // auto blob = instance->createBlob(createBlob);
+                // if (!blob) {
+                //     mesa_loge("Failed to create coherent memory: failed to create blob.");
+                //     res = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+                //     return coherentMemory;
+                // }
 
-                VirtGpuResourceMappingPtr mapping = blob->createMapping();
-                if (!mapping) {
-                    mesa_loge("Failed to create coherent memory: failed to create blob mapping.");
-                    res = VK_ERROR_OUT_OF_DEVICE_MEMORY;
-                    return coherentMemory;
-                }
+                // VirtGpuResourceMappingPtr mapping = blob->createMapping();
+                // if (!mapping) {
+                //     mesa_loge("Failed to create coherent memory: failed to create blob mapping.");
+                //     res = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+                //     return coherentMemory;
+                // }
 
-                coherentMemory =
-                    std::make_shared<CoherentMemory>(mapping, createBlob.size, device, mem);
+                // coherentMemory =
+                //     std::make_shared<CoherentMemory>(mapping, createBlob.size, device, mem);
             }
         } else {
             mesa_loge("FATAL: Unsupported virtual memory feature");
@@ -3894,183 +3906,186 @@ VkResult ResourceTracker::on_vkAllocateMemory(void* context, VkResult input_resu
     // Check for import first; this takes precedence over exportDmabuf in creating the
     // VirtGpuResource
     if (importDmabuf) {
-        VirtGpuExternalHandle importHandle = {};
-        // importBlob impl may close the receivedFd after it creates an GEM handle from it. dup()
-        // the FD here for input to that impl, then manage the original FD at the Vulkan level
-        importHandle.osHandle = dup(importFdInfoPtr->fd);
-        importHandle.type = kMemHandleDmabuf;
+        // VirtGpuExternalHandle importHandle = {};
+        // // importBlob impl may close the receivedFd after it creates an GEM handle from it. dup()
+        // // the FD here for input to that impl, then manage the original FD at the Vulkan level
 
-        auto instance = VirtGpuDevice::getInstance();
-        bufferBlob = instance->importBlob(importHandle);
-        if (!bufferBlob) {
-            mesa_loge("%s: Failed to import colorBuffer resource\n", __func__);
-            return VK_ERROR_OUT_OF_DEVICE_MEMORY;
-        }
-        // As per the Vulkan spec, the ownership of this FD has been transferred
-        // to the implementation
-        importedFd = importFdInfoPtr->fd;
+        // importHandle.osHandle = dup(importFdInfoPtr->fd);
+        // importHandle.type = kMemHandleDmabuf;
+        // auto instance = VirtGpuDevice::getInstance();
+        // bufferBlob = instance->importBlob(importHandle);
+        // if (!bufferBlob) {
+        //     mesa_loge("%s: Failed to import colorBuffer resource\n", __func__);
+        //     return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        // }
+        // // As per the Vulkan spec, the ownership of this FD has been transferred
+        // // to the implementation
+        // importedFd = importFdInfoPtr->fd;
+        abort();
     } else if (exportDmabuf) {
-        VirtGpuDevice* instance = VirtGpuDevice::getInstance();
-        hasDedicatedImage =
-            dedicatedAllocInfoPtr && (dedicatedAllocInfoPtr->image != VK_NULL_HANDLE);
-        hasDedicatedBuffer =
-            dedicatedAllocInfoPtr && (dedicatedAllocInfoPtr->buffer != VK_NULL_HANDLE);
+        // #error e2
+        // VirtGpuDevice* instance = VirtGpuDevice::getInstance();
+        // hasDedicatedImage =
+        //     dedicatedAllocInfoPtr && (dedicatedAllocInfoPtr->image != VK_NULL_HANDLE);
+        // hasDedicatedBuffer =
+        //     dedicatedAllocInfoPtr && (dedicatedAllocInfoPtr->buffer != VK_NULL_HANDLE);
 
-        if (hasDedicatedImage) {
-            VkImageCreateInfo imageCreateInfo;
-            {
-                std::lock_guard<std::recursive_mutex> lock(mLock);
+        // if (hasDedicatedImage) {
+        //     VkImageCreateInfo imageCreateInfo;
+        //     {
+        //         std::lock_guard<std::recursive_mutex> lock(mLock);
 
-                auto it = info_VkImage.find(dedicatedAllocInfoPtr->image);
-                if (it == info_VkImage.end()) return VK_ERROR_INITIALIZATION_FAILED;
-                const auto& imageInfo = it->second;
+        //         auto it = info_VkImage.find(dedicatedAllocInfoPtr->image);
+        //         if (it == info_VkImage.end()) return VK_ERROR_INITIALIZATION_FAILED;
+        //         const auto& imageInfo = it->second;
 
-                imageCreateInfo = imageInfo.createInfo;
-            }
+        //         imageCreateInfo = imageInfo.createInfo;
+        //     }
 
-            // Need to query the stride of the underyling image resource
-            // (VkSubresourceLayout::rowPitch) In most cases, the application will have created the
-            // VkImage w/ VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT, in which case the aspectMask to
-            // query is the PLANE_0_BIT resource. Otherwise, query the more generic COLOR_BIT.
-            // Note: For VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT, the image may actually be emulated
-            // with VK_IMAGE_TILING_LINEAR.
-            const VkImageSubresource imageSubresource = {
-                .aspectMask = (imageCreateInfo.tiling == VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT)
-                                  ? VK_IMAGE_ASPECT_MEMORY_PLANE_0_BIT_EXT
-                                  : VK_IMAGE_ASPECT_COLOR_BIT,
-                .mipLevel = 0,
-                .arrayLayer = 0,
-            };
-            VkSubresourceLayout subResourceLayout;
-            enc->vkGetImageSubresourceLayout(device, dedicatedAllocInfoPtr->image,
-                                             &imageSubresource, &subResourceLayout,
-                                             true /* do lock */);
-            if (!subResourceLayout.rowPitch) {
-                mesa_loge("Failed to query stride for VirtGpu resource creation.");
-                return VK_ERROR_INITIALIZATION_FAILED;
-            }
+        //     // Need to query the stride of the underyling image resource
+        //     // (VkSubresourceLayout::rowPitch) In most cases, the application will have created the
+        //     // VkImage w/ VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT, in which case the aspectMask to
+        //     // query is the PLANE_0_BIT resource. Otherwise, query the more generic COLOR_BIT.
+        //     // Note: For VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT, the image may actually be emulated
+        //     // with VK_IMAGE_TILING_LINEAR.
+        //     const VkImageSubresource imageSubresource = {
+        //         .aspectMask = (imageCreateInfo.tiling == VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT)
+        //                           ? VK_IMAGE_ASPECT_MEMORY_PLANE_0_BIT_EXT
+        //                           : VK_IMAGE_ASPECT_COLOR_BIT,
+        //         .mipLevel = 0,
+        //         .arrayLayer = 0,
+        //     };
+        //     VkSubresourceLayout subResourceLayout;
+        //     enc->vkGetImageSubresourceLayout(device, dedicatedAllocInfoPtr->image,
+        //                                      &imageSubresource, &subResourceLayout,
+        //                                      true /* do lock */);
+        //     if (!subResourceLayout.rowPitch) {
+        //         mesa_loge("Failed to query stride for VirtGpu resource creation.");
+        //         return VK_ERROR_INITIALIZATION_FAILED;
+        //     }
 
-            uint32_t virglFormat = gfxstream::vk::getVirglFormat(imageCreateInfo.format);
-            if (!virglFormat) {
-                mesa_loge("Unsupported VK format for VirtGpu resource, vkFormat: 0x%x",
-                          imageCreateInfo.format);
-                return VK_ERROR_FORMAT_NOT_SUPPORTED;
-            }
-            const uint32_t target = PIPE_TEXTURE_2D;
-            uint32_t bind = VIRGL_BIND_RENDER_TARGET;
+        //     uint32_t virglFormat = gfxstream::vk::getVirglFormat(imageCreateInfo.format);
+        //     if (!virglFormat) {
+        //         mesa_loge("Unsupported VK format for VirtGpu resource, vkFormat: 0x%x",
+        //                   imageCreateInfo.format);
+        //         return VK_ERROR_FORMAT_NOT_SUPPORTED;
+        //     }
+        //     const uint32_t target = PIPE_TEXTURE_2D;
+        //     uint32_t bind = VIRGL_BIND_RENDER_TARGET;
 
-            if (mCaps.vulkanCapset.alwaysBlob) {
-                struct gfxstreamResourceCreate3d create3d = {};
-                struct VirtGpuExecBuffer exec = {};
-                struct gfxstreamPlaceholderCommandVk placeholderCmd = {};
-                struct VirtGpuCreateBlob createBlob = {};
+        //     if (mCaps.vulkanCapset.alwaysBlob) {
+        //         struct gfxstreamResourceCreate3d create3d = {};
+        //         struct VirtGpuExecBuffer exec = {};
+        //         struct gfxstreamPlaceholderCommandVk placeholderCmd = {};
+        //         struct VirtGpuCreateBlob createBlob = {};
 
-                create3d.hdr.opCode = GFXSTREAM_RESOURCE_CREATE_3D;
-                create3d.bind = bind;
-                create3d.target = target;
-                create3d.format = virglFormat;
-                create3d.width = imageCreateInfo.extent.width;
-                create3d.height = imageCreateInfo.extent.height;
-                create3d.blobId = ++mAtomicId;
+        //         create3d.hdr.opCode = GFXSTREAM_RESOURCE_CREATE_3D;
+        //         create3d.bind = bind;
+        //         create3d.target = target;
+        //         create3d.format = virglFormat;
+        //         create3d.width = imageCreateInfo.extent.width;
+        //         create3d.height = imageCreateInfo.extent.height;
+        //         create3d.blobId = ++mAtomicId;
 
-                createBlob.blobCmd = reinterpret_cast<uint8_t*>(&create3d);
-                createBlob.blobCmdSize = sizeof(create3d);
-                createBlob.blobMem = kBlobMemHost3d;
-                createBlob.flags = kBlobFlagShareable | kBlobFlagCrossDevice;
-                createBlob.blobId = create3d.blobId;
-                createBlob.size = finalAllocInfo.allocationSize;
+        //         createBlob.blobCmd = reinterpret_cast<uint8_t*>(&create3d);
+        //         createBlob.blobCmdSize = sizeof(create3d);
+        //         createBlob.blobMem = kBlobMemHost3d;
+        //         createBlob.flags = kBlobFlagShareable | kBlobFlagCrossDevice;
+        //         createBlob.blobId = create3d.blobId;
+        //         createBlob.size = finalAllocInfo.allocationSize;
 
-                bufferBlob = instance->createBlob(createBlob);
-                if (!bufferBlob) return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        //         bufferBlob = instance->createBlob(createBlob);
+        //         if (!bufferBlob) return VK_ERROR_OUT_OF_DEVICE_MEMORY;
 
-                placeholderCmd.hdr.opCode = GFXSTREAM_PLACEHOLDER_COMMAND_VK;
-                exec.command = static_cast<void*>(&placeholderCmd);
-                exec.command_size = sizeof(placeholderCmd);
-                exec.flags = kRingIdx;
-                exec.ring_idx = 1;
-                if (instance->execBuffer(exec, bufferBlob.get())) {
-                    mesa_loge("Failed to execbuffer placeholder command.");
-                    return VK_ERROR_OUT_OF_HOST_MEMORY;
-                }
+        //         placeholderCmd.hdr.opCode = GFXSTREAM_PLACEHOLDER_COMMAND_VK;
+        //         exec.command = static_cast<void*>(&placeholderCmd);
+        //         exec.command_size = sizeof(placeholderCmd);
+        //         exec.flags = kRingIdx;
+        //         exec.ring_idx = 1;
+        //         if (instance->execBuffer(exec, bufferBlob.get())) {
+        //             mesa_loge("Failed to execbuffer placeholder command.");
+        //             return VK_ERROR_OUT_OF_HOST_MEMORY;
+        //         }
 
-                if (bufferBlob->wait()) {
-                    mesa_loge("Failed to wait for blob.");
-                    return VK_ERROR_OUT_OF_HOST_MEMORY;
-                }
-            } else {
-                bufferBlob = instance->createResource(
-                    imageCreateInfo.extent.width, imageCreateInfo.extent.height,
-                    subResourceLayout.rowPitch,
-                    subResourceLayout.rowPitch * imageCreateInfo.extent.height, virglFormat, target,
-                    bind);
-                if (!bufferBlob) {
-                    mesa_loge("Failed to create colorBuffer resource for Image memory");
-                    return VK_ERROR_OUT_OF_DEVICE_MEMORY;
-                }
-                if (bufferBlob->wait()) {
-                    mesa_loge("Failed to wait for colorBuffer resource for Image memory");
-                    return VK_ERROR_OUT_OF_DEVICE_MEMORY;
-                }
-            }
-        } else if (hasDedicatedBuffer) {
-            uint32_t virglFormat = VIRGL_FORMAT_R8_UNORM;
-            const uint32_t target = PIPE_BUFFER;
-            uint32_t bind = VIRGL_BIND_LINEAR;
-            uint32_t width = finalAllocInfo.allocationSize;
-            uint32_t height = 1;
+        //         if (bufferBlob->wait()) {
+        //             mesa_loge("Failed to wait for blob.");
+        //             return VK_ERROR_OUT_OF_HOST_MEMORY;
+        //         }
+        //     } else {
+        //         bufferBlob = instance->createResource(
+        //             imageCreateInfo.extent.width, imageCreateInfo.extent.height,
+        //             subResourceLayout.rowPitch,
+        //             subResourceLayout.rowPitch * imageCreateInfo.extent.height, virglFormat, target,
+        //             bind);
+        //         if (!bufferBlob) {
+        //             mesa_loge("Failed to create colorBuffer resource for Image memory");
+        //             return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        //         }
+        //         if (bufferBlob->wait()) {
+        //             mesa_loge("Failed to wait for colorBuffer resource for Image memory");
+        //             return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        //         }
+        //     }
+        // } else if (hasDedicatedBuffer) {
+        //     uint32_t virglFormat = VIRGL_FORMAT_R8_UNORM;
+        //     const uint32_t target = PIPE_BUFFER;
+        //     uint32_t bind = VIRGL_BIND_LINEAR;
+        //     uint32_t width = finalAllocInfo.allocationSize;
+        //     uint32_t height = 1;
 
-            if (mCaps.vulkanCapset.alwaysBlob) {
-                struct gfxstreamResourceCreate3d create3d = {};
-                struct VirtGpuExecBuffer exec = {};
-                struct gfxstreamPlaceholderCommandVk placeholderCmd = {};
-                struct VirtGpuCreateBlob createBlob = {};
+        //     if (mCaps.vulkanCapset.alwaysBlob) {
+        //         struct gfxstreamResourceCreate3d create3d = {};
+        //         struct VirtGpuExecBuffer exec = {};
+        //         struct gfxstreamPlaceholderCommandVk placeholderCmd = {};
+        //         struct VirtGpuCreateBlob createBlob = {};
 
-                create3d.hdr.opCode = GFXSTREAM_RESOURCE_CREATE_3D;
-                create3d.bind = bind;
-                create3d.target = target;
-                create3d.format = virglFormat;
-                create3d.width = width;
-                create3d.height = height;
-                create3d.blobId = ++mAtomicId;
+        //         create3d.hdr.opCode = GFXSTREAM_RESOURCE_CREATE_3D;
+        //         create3d.bind = bind;
+        //         create3d.target = target;
+        //         create3d.format = virglFormat;
+        //         create3d.width = width;
+        //         create3d.height = height;
+        //         create3d.blobId = ++mAtomicId;
 
-                createBlob.blobCmd = reinterpret_cast<uint8_t*>(&create3d);
-                createBlob.blobCmdSize = sizeof(create3d);
-                createBlob.blobMem = kBlobMemHost3d;
-                createBlob.flags = kBlobFlagShareable | kBlobFlagCrossDevice;
-                createBlob.blobId = create3d.blobId;
-                createBlob.size = width;
+        //         createBlob.blobCmd = reinterpret_cast<uint8_t*>(&create3d);
+        //         createBlob.blobCmdSize = sizeof(create3d);
+        //         createBlob.blobMem = kBlobMemHost3d;
+        //         createBlob.flags = kBlobFlagShareable | kBlobFlagCrossDevice;
+        //         createBlob.blobId = create3d.blobId;
+        //         createBlob.size = width;
 
-                bufferBlob = instance->createBlob(createBlob);
-                if (!bufferBlob) return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        //         bufferBlob = instance->createBlob(createBlob);
+        //         if (!bufferBlob) return VK_ERROR_OUT_OF_DEVICE_MEMORY;
 
-                placeholderCmd.hdr.opCode = GFXSTREAM_PLACEHOLDER_COMMAND_VK;
-                exec.command = static_cast<void*>(&placeholderCmd);
-                exec.command_size = sizeof(placeholderCmd);
-                exec.flags = kRingIdx;
-                exec.ring_idx = 1;
-                if (instance->execBuffer(exec, bufferBlob.get())) {
-                    mesa_loge("Failed to allocate coherent memory: failed to execbuffer for wait.");
-                    return VK_ERROR_OUT_OF_HOST_MEMORY;
-                }
+        //         placeholderCmd.hdr.opCode = GFXSTREAM_PLACEHOLDER_COMMAND_VK;
+        //         exec.command = static_cast<void*>(&placeholderCmd);
+        //         exec.command_size = sizeof(placeholderCmd);
+        //         exec.flags = kRingIdx;
+        //         exec.ring_idx = 1;
+        //         if (instance->execBuffer(exec, bufferBlob.get())) {
+        //             mesa_loge("Failed to allocate coherent memory: failed to execbuffer for wait.");
+        //             return VK_ERROR_OUT_OF_HOST_MEMORY;
+        //         }
 
-                bufferBlob->wait();
-            } else {
-                bufferBlob = instance->createResource(width, height, width, width * height,
-                                                      virglFormat, target, bind);
-                if (!bufferBlob) {
-                    mesa_loge("Failed to create colorBuffer resource for Image memory");
-                    return VK_ERROR_OUT_OF_DEVICE_MEMORY;
-                }
-                if (bufferBlob->wait()) {
-                    mesa_loge("Failed to wait for colorBuffer resource for Image memory");
-                    return VK_ERROR_OUT_OF_DEVICE_MEMORY;
-                }
-            }
-        } else {
-            mesa_logw(
-                "VkDeviceMemory is not exportable (VkExportMemoryAllocateInfo). Requires "
-                "VkMemoryDedicatedAllocateInfo::image to create external resource.");
-        }
+        //         bufferBlob->wait();
+        //     } else {
+        //         bufferBlob = instance->createResource(width, height, width, width * height,
+        //                                               virglFormat, target, bind);
+        //         if (!bufferBlob) {
+        //             mesa_loge("Failed to create colorBuffer resource for Image memory");
+        //             return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        //         }
+        //         if (bufferBlob->wait()) {
+        //             mesa_loge("Failed to wait for colorBuffer resource for Image memory");
+        //             return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        //         }
+        //     }
+        // } else {
+        //     mesa_logw(
+        //         "VkDeviceMemory is not exportable (VkExportMemoryAllocateInfo). Requires "
+        //         "VkMemoryDedicatedAllocateInfo::image to create external resource.");
+        // }
+        abort();
     }
 
     if (bufferBlob) {
@@ -4395,12 +4410,16 @@ VkResult ResourceTracker::on_vkCreateImage(void* context, VkResult, VkDevice dev
                 physicalDevice = it->second.physdev;
             }
             if (doImageDrmFormatModifierEmulation(physicalDevice)) {
+#if DETECT_OS_WASI
+                bool canUseLinearModifier = false;
+#else
                 bool canUseLinearModifier =
                     (drmFmtMod && drmFmtMod->drmFormatModifier == DRM_FORMAT_MOD_LINEAR) ||
                     std::any_of(
                         drmFmtModList->pDrmFormatModifiers,
                         drmFmtModList->pDrmFormatModifiers + drmFmtModList->drmFormatModifierCount,
                         [](const uint64_t mod) { return mod == DRM_FORMAT_MOD_LINEAR; });
+#endif
                 // host doesn't support DRM format modifiers, try emulating
                 if (canUseLinearModifier) {
                     mesa_logd(
@@ -4610,7 +4629,7 @@ VkResult ResourceTracker::on_vkCreateImage(void* context, VkResult, VkDevice dev
         updateMemoryTypeBits(&memReqs.memoryTypeBits, mCaps.vulkanCapset.colorBufferMemoryIndex);
     }
 #endif
-#if defined(LINUX_GUEST_BUILD)
+#if defined(LINUX_GUEST_BUILD) && !DETECT_OS_WASI
     if (mCaps.vulkanCapset.colorBufferMemoryIndex == 0xFFFFFFFF) {
         mCaps.vulkanCapset.colorBufferMemoryIndex = getColorBufferMemoryIndex(context, device);
     }
@@ -5503,7 +5522,7 @@ void ResourceTracker::on_vkGetImageMemoryRequirements2(void* context, VkDevice d
 VkResult ResourceTracker::on_vkGetImageDrmFormatModifierPropertiesEXT(
     void* context, VkResult, VkDevice device, VkImage image,
     VkImageDrmFormatModifierPropertiesEXT* pProperties) {
-#ifdef LINUX_GUEST_BUILD
+#if defined(LINUX_GUEST_BUILD) && !DETECT_OS_WASI
     auto it = info_VkDevice.find(device);
     if (it == info_VkDevice.end()) return VK_ERROR_UNKNOWN;
     if (doImageDrmFormatModifierEmulation(it->second.physdev)) {
@@ -5954,7 +5973,7 @@ VkResult ResourceTracker::on_vkImportSemaphoreFdKHR(
 VkResult ResourceTracker::on_vkGetMemoryFdPropertiesKHR(
     void* context, VkResult, VkDevice device, VkExternalMemoryHandleTypeFlagBits handleType, int fd,
     VkMemoryFdPropertiesKHR* pMemoryFdProperties) {
-#ifdef LINUX_GUEST_BUILD
+#if defined(LINUX_GUEST_BUILD) && !DETECT_OS_WASI
     if (!(handleType & VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT)) {
         mesa_loge("%s: VK_KHR_external_memory_fd behavior not defined for handleType: 0x%x\n",
                   __func__, handleType);
@@ -6922,7 +6941,7 @@ void ResourceTracker::on_vkUpdateDescriptorSetWithTemplate(
         bufferViews, inlineUniformBlockBuffer, true /* do lock */);
 }
 
-#ifdef LINUX_GUEST_BUILD
+#if defined(LINUX_GUEST_BUILD) && !DETECT_OS_WASI
 static void fillEmulatedDrmFormatModPropsList(
     const VkFormatProperties* pFormatProperties,
     VkDrmFormatModifierPropertiesListEXT* emulatedDrmFmtModPropsList) {
@@ -6949,7 +6968,7 @@ void ResourceTracker::on_vkGetPhysicalDeviceFormatProperties2(
     enc->vkGetPhysicalDeviceFormatProperties2(physicalDevice, format, pFormatProperties,
                                               true /* do lock */);
 
-#ifdef LINUX_GUEST_BUILD
+#if defined(LINUX_GUEST_BUILD) && !DETECT_OS_WASI
     VkDrmFormatModifierPropertiesListEXT* emulatedDrmFmtModPropsList =
         vk_find_struct(pFormatProperties, DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT);
     if (emulatedDrmFmtModPropsList && doImageDrmFormatModifierEmulation(physicalDevice)) {
@@ -7009,7 +7028,7 @@ VkResult ResourceTracker::on_vkGetPhysicalDeviceImageFormatProperties2(
         }
     }
 
-#ifdef LINUX_GUEST_BUILD
+#if defined(LINUX_GUEST_BUILD) && !DETECT_OS_WASI
     const VkPhysicalDeviceImageDrmFormatModifierInfoEXT* drmFmtMod =
         vk_find_struct_const(pImageFormatInfo, PHYSICAL_DEVICE_IMAGE_DRM_FORMAT_MODIFIER_INFO_EXT);
     VkDrmFormatModifierPropertiesListEXT* emulatedDrmFmtModPropsList = nullptr;
@@ -7044,7 +7063,7 @@ VkResult ResourceTracker::on_vkGetPhysicalDeviceImageFormatProperties2(
 
     if (hostRes != VK_SUCCESS) return hostRes;
 
-#ifdef LINUX_GUEST_BUILD
+#if defined(LINUX_GUEST_BUILD) && !DETECT_OS_WASI
     if (emulatedDrmFmtModPropsList) {
         VkFormatProperties formatProperties;
         enc->vkGetPhysicalDeviceFormatProperties(physicalDevice, localImageFormatInfo.format,
@@ -7319,7 +7338,7 @@ VkResult ResourceTracker::on_vkResetCommandBuffer(void* context, VkResult input_
     if (!supportsDeferredCommands()) {
         VkResult res = enc->vkResetCommandBuffer(commandBuffer, flags, true /* do lock */);
         resetCommandBufferStagingInfo(commandBuffer, true /* also reset primaries */,
-                                    true /* also clear pending descriptor sets */);
+                                      true /* also clear pending descriptor sets */);
         return res;
     }
 

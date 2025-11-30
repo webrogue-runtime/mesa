@@ -141,12 +141,15 @@ class VulkanMarshalingCodegen(VulkanTypeIterator):
                 self.genStreamCall(handle64VarType, handle64VarAccess, handle64Bytes)
         else:
             self.genStreamCall(handle64VarType, handle64VarAccess, handle64Bytes)
-            self.cgen.stmt(
-                "%s->handleMapping()->mapHandles_u64_%s(%s, %s%s, %s)" %
-                (self.streamVarName, vulkanType.typeName,
-                handle64VarAccess,
-                self.makeCastExpr(vulkanType.getForNonConstAccess()), access,
-                lenAccess))
+            if lenAccess != "1" and vulkanType.typeName == "VkImage":
+                self.cgen.stmt("for(int i = 0; i<%s; i++) { %s[i] = new_from_host_u64_VkImage(%s[i]); }" % (lenAccess, access, handle64VarAccess))
+            else:
+                self.cgen.stmt(
+                    "%s->handleMapping()->mapHandles_u64_%s(%s, %s%s, %s)" %
+                    (self.streamVarName, vulkanType.typeName,
+                    handle64VarAccess,
+                    self.makeCastExpr(vulkanType.getForNonConstAccess()), access,
+                    lenAccess))
 
         if lenAccess != "1":
             self.cgen.endIf()

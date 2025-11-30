@@ -14,6 +14,7 @@
 #include "VirtioGpuPipeStream.h"
 #include "c11/threads.h"
 #include "util/log.h"
+#include "WebrogueStream.h"
 
 #define STREAM_BUFFER_SIZE (4 * 1024 * 1024)
 
@@ -101,6 +102,7 @@ bool GfxStreamConnectionManager::initialize() {
             break;
         }
 #endif
+#ifndef __wasi__
         case GFXSTREAM_TRANSPORT_QEMU_PIPE: {
             mStream = new QemuPipeStream(STREAM_BUFFER_SIZE);
             if (mStream->connect() < 0) {
@@ -145,14 +147,25 @@ bool GfxStreamConnectionManager::initialize() {
 
             break;
         }
+#else
+case GFXSTREAM_TRANSPORT_WEBROGUE: {
+    mStream = new WebrogueStream(STREAM_BUFFER_SIZE);
+    if (mStream->connect() < 0) {
+        mesa_loge("Failed to connect to host (makeWebrogueStream)\n");
+        return false;
+    }
+
+    break;
+}
+#endif
         default:
             return false;
     }
 
     // send zero 'clientFlags' to the host.  This is actually part of the gfxstream protocol.
-    unsigned int* pClientFlags = (unsigned int*)mStream->allocBuffer(sizeof(unsigned int));
-    *pClientFlags = 0;
-    mStream->commitBuffer(sizeof(unsigned int));
+    // unsigned int* pClientFlags = (unsigned int*)mStream->allocBuffer(sizeof(unsigned int));
+    // *pClientFlags = 0;
+    // mStream->commitBuffer(sizeof(unsigned int));
 
     return true;
 }

@@ -5,6 +5,7 @@
 
 #include <errno.h>
 #include <string.h>
+#include <cstdio>
 
 #include "GfxStreamConnectionManager.h"
 #include "GfxStreamRenderControl.h"
@@ -17,6 +18,7 @@
 #include "util/perf/cpu_trace.h"
 #include "vk_sync_dummy.h"
 #include "vk_util.h"
+#include "Resources.h"
 
 uint32_t gSeqno = 0;
 uint32_t gNoRenderControlEnc = 0;
@@ -54,12 +56,42 @@ static GfxStreamConnectionManager* getConnectionManager(void) {
 
 namespace {
 
+#if DETECT_OS_WASI
+__attribute__((import_name("make_vk_surface")))
+__attribute__((import_module("webrogue_gfx"))) 
+void imported_webrogue_gfx_make_vk_surface(void* window,
+                                           uint64_t vk_instance, 
+                                           uint64_t *out_vk_surface);
+
+VKAPI_ATTR VkResult VKAPI_CALL
+wsi_CreateSurfaceWEBROGUE(
+    VkInstance                                  instance,
+    const VkSurfaceCreateInfoWEBROGUE*          pCreateInfo,
+    const VkAllocationCallbacks*                pAllocator,
+    VkSurfaceKHR*                               pSurface)
+{
+    gfxstream_vk_instance* gfxstream_instance = (gfxstream_vk_instance*)instance;
+    if (gfxstream_instance->init_failed) {
+        return VK_SUCCESS;
+    }
+
+    uint64_t host_instance = get_host_u64_VkInstance(gfxstream_instance->internal_object);
+
+    uint64_t host_surface = 0;
+    imported_webrogue_gfx_make_vk_surface(pCreateInfo->window, host_instance, &host_surface);
+
+    *pSurface = new_from_host_u64_VkSurfaceKHR((VkSurfaceKHR)host_surface);
+    return VK_SUCCESS;
+}
+#endif
+
 static bool instance_extension_table_initialized = false;
 static struct vk_instance_extension_table gfxstream_vk_instance_extensions_supported = {};
 
 // Always provided by guest driver only; never encoded/decoded to/from host
 static const char* const kGuestEmulatedInstanceExtensions[] = {
     VK_KHR_SURFACE_EXTENSION_NAME,
+    VK_WEBROGUE_SURFACE_EXTENSION_NAME,
 #if defined(GFXSTREAM_VK_WAYLAND)
     VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME,
 #endif
@@ -209,9 +241,10 @@ static VkResult gfxstream_vk_physical_device_init(
 
     struct vk_physical_device_dispatch_table dispatch_table;
     memset(&dispatch_table, 0, sizeof(struct vk_physical_device_dispatch_table));
+    dispatch_table.GetPhysicalDeviceProperties2 = gfxstream_vk_GetPhysicalDeviceProperties2;
     vk_physical_device_dispatch_table_from_entrypoints(
         &dispatch_table, &gfxstream_vk_physical_device_entrypoints, false);
-#if !DETECT_OS_FUCHSIA
+#if !DETECT_OS_FUCHSIA && !DETECT_OS_WASI
     vk_physical_device_dispatch_table_from_entrypoints(&dispatch_table,
                                                        &wsi_physical_device_entrypoints, false);
 #endif
@@ -357,7 +390,9 @@ VkResult gfxstream_vk_CreateInstance(const VkInstanceCreateInfo* pCreateInfo,
     memset(&dispatch_table, 0, sizeof(struct vk_instance_dispatch_table));
     vk_instance_dispatch_table_from_entrypoints(&dispatch_table, &gfxstream_vk_instance_entrypoints,
                                                 false);
-#if !DETECT_OS_FUCHSIA
+#if DETECT_OS_WASI
+    dispatch_table.CreateSurfaceWEBROGUE = wsi_CreateSurfaceWEBROGUE;
+#elif !DETECT_OS_FUCHSIA
     vk_instance_dispatch_table_from_entrypoints(&dispatch_table, &wsi_instance_entrypoints, false);
 #endif
 
@@ -629,9 +664,10 @@ VkResult gfxstream_vk_CreateDevice(VkPhysicalDevice physicalDevice,
     if (result == VK_SUCCESS) {
         struct vk_device_dispatch_table dispatch_table;
         memset(&dispatch_table, 0, sizeof(struct vk_device_dispatch_table));
+        dispatch_table.CreateCommandPool = gfxstream_vk_CreateCommandPool;
         vk_device_dispatch_table_from_entrypoints(&dispatch_table, &gfxstream_vk_device_entrypoints,
                                                   false);
-#if !DETECT_OS_FUCHSIA
+#if !DETECT_OS_FUCHSIA && !DETECT_OS_WASI
         vk_device_dispatch_table_from_entrypoints(&dispatch_table, &wsi_device_entrypoints, false);
 #endif
 

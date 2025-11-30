@@ -154,6 +154,8 @@ SUPPORTED_FEATURES = [
     "VK_EXT_fragment_density_map",
     # b/349122558 Zink
     "VK_EXT_color_write_enable",
+    # Webrogue
+    "VK_WEBROGUE_surface",
 ]
 
 HOST_MODULES = ["goldfish_vk_extension_structs", "goldfish_vk_marshaling",
@@ -169,7 +171,6 @@ SUPPORTED_MODULES = {
     "VK_EXT_debug_utils": HOST_MODULES,
     "VK_EXT_debug_report": HOST_MODULES,
     "VK_EXT_validation_features": HOST_MODULES,
-    "VK_KHR_surface": ["goldfish_vk_dispatch"],
     "VK_KHR_xcb_surface": ["goldfish_vk_dispatch"],
     "VK_KHR_win32_surface": ["goldfish_vk_dispatch"],
     "VK_EXT_metal_surface": ["goldfish_vk_dispatch"],
@@ -184,7 +185,6 @@ SUPPORTED_MODULES = {
     "VK_ANDROID_external_memory_android_hardware_buffer": ["goldfish_vk_dispatch", "func_table"],
     "VK_KHR_android_surface": ["func_table"],
     "VK_EXT_swapchain_maintenance1" : HOST_MODULES,
-    "VK_KHR_swapchain" : HOST_MODULES,
     "VK_NV_device_diagnostic_checkpoints": ["goldfish_vk_dispatch"],
     "VK_KHR_ray_tracing_pipeline": ["goldfish_vk_dispatch"],
     "VK_KHR_pipeline_library": HOST_MODULES,

@@ -35,6 +35,7 @@ branch of the member gitlab server.
         <platform name="sci" protect="VK_USE_PLATFORM_SCI" comment="NVIDIA SCI"/>
         <platform name="provisional" protect="VK_ENABLE_BETA_EXTENSIONS" comment="Enable declarations for beta/provisional extensions"/>
         <platform name="screen" protect="VK_USE_PLATFORM_SCREEN_QNX" comment="QNX Screen Graphics Subsystem"/>
+        <platform name="webrogue" protect="VK_USE_PLATFORM_WEBROGUE" comment="Webrogue"/>
         <platform name="ohos" protect="VK_USE_PLATFORM_OHOS" comment="Open Harmony OS"/>
     </platforms>
 
@@ -144,8 +145,8 @@ branch of the member gitlab server.
         <type requires="nvscisync.h" name="NvSciSyncAttrList"/>
         <type requires="nvscisync.h" name="NvSciSyncObj"/>
         <type requires="nvscisync.h" name="NvSciSyncFence"/>
-        <type requires="nvscibuf.h" name="NvSciBufAttrList"/>
-        <type requires="nvscibuf.h" name="NvSciBufObj"/>
+        <type requires="nvscibufaaaa.h" name="NvSciBufAttrList"/>
+        <type requires="nvscibufaaaa.h" name="NvSciBufObj"/>
 
         <type category="define">
 #define <name>VK_MAKE_VERSION</name>(major, minor, patch) \
@@ -521,6 +522,7 @@ typedef void* <name>MTLSharedEvent_id</name>;
         <type requires="VkShaderCreateFlagBitsEXT"        category="bitmask">typedef <type>VkFlags</type> <name>VkShaderCreateFlagsEXT</name>;</type>
         <type requires="VkTileShadingRenderPassFlagBitsQCOM"   category="bitmask">typedef <type>VkFlags</type> <name>VkTileShadingRenderPassFlagsQCOM</name>;</type>
         <type bitvalues="VkPhysicalDeviceSchedulingControlsFlagBitsARM" category="bitmask">typedef <type>VkFlags64</type> <name>VkPhysicalDeviceSchedulingControlsFlagsARM</name>;</type>
+        <type                                             category="bitmask">typedef <type>VkFlags</type> <name>VkSurfaceCreateFlagsWEBROGUE</name>;</type>
         <type                                             category="bitmask">typedef <type>VkFlags</type> <name>VkSurfaceCreateFlagsOHOS</name>;</type>
         <type requires="VkSwapchainImageUsageFlagBitsOHOS" category="bitmask">typedef <type>VkFlags</type> <name>VkSwapchainImageUsageFlagsOHOS</name>;</type>
         <type                                             category="bitmask">typedef <type>VkFlags</type> <name>VkPerformanceCounterDescriptionFlagsARM</name>;</type>
@@ -10601,6 +10603,12 @@ typedef void* <name>MTLSharedEvent_id</name>;
             <member optional="true"><type>void</type>*                           <name>pNext</name></member>
             <member><type>VkBool32</type>                                        <name>presentMetering</name></member>
         </type>
+        <type category="struct" name="VkSurfaceCreateInfoWEBROGUE">
+            <member values="VK_STRUCTURE_TYPE_SURFACE_CREATE_INFO_WEBROGUE"><type>VkStructureType</type> <name>sType</name></member>
+            <member optional="true">const <type>void</type>*                       <name>pNext</name></member>
+            <member optional="true"><type>VkSurfaceCreateFlagsWEBROGUE</type>      <name>flags</name></member>
+            <member><type>void</type>*                                             <name>window</name></member>
+        </type>
         <type category="struct" name="VkExternalComputeQueueDeviceCreateInfoNV" structextends="VkDeviceCreateInfo">
             <member values="VK_STRUCTURE_TYPE_EXTERNAL_COMPUTE_QUEUE_DEVICE_CREATE_INFO_NV"><type>VkStructureType</type> <name>sType</name></member>
             <member optional="true">const <type>void</type>* <name>pNext</name></member>
@@ -17762,6 +17770,13 @@ typedef void* <name>MTLSharedEvent_id</name>;
             <param externsync="true"><type>VkCommandBuffer</type> <name>commandBuffer</name></param>
             <param><type>uint32_t</type> <name>infoCount</name></param>
             <param len="infoCount">const <type>VkConvertCooperativeVectorMatrixInfoNV</type>* <name>pInfos</name></param>
+        </command>
+        <command successcodes="VK_SUCCESS" errorcodes="VK_ERROR_OUT_OF_HOST_MEMORY,VK_ERROR_OUT_OF_DEVICE_MEMORY">
+            <proto><type>VkResult</type> <name>vkCreateSurfaceWEBROGUE</name></proto>
+            <param><type>VkInstance</type> <name>instance</name></param>
+            <param>const <type>VkSurfaceCreateInfoWEBROGUE</type>* <name>pCreateInfo</name></param>
+            <param optional="true">const <type>VkAllocationCallbacks</type>* <name>pAllocator</name></param>
+            <param><type>VkSurfaceKHR</type>* <name>pSurface</name></param>
         </command>
         <command conditionalrendering="true" queues="VK_QUEUE_COMPUTE_BIT" renderpass="inside" cmdbufferlevel="primary,secondary" tasks="action">
             <proto><type>void</type> <name>vkCmdDispatchTileQCOM</name></proto>
@@ -29122,6 +29137,16 @@ typedef void* <name>MTLSharedEvent_id</name>;
             <require>
                 <enum value="0"                                             name="VK_EXT_EXTENSION_623_SPEC_VERSION"/>
                 <enum value="&quot;VK_EXT_extension_623&quot;"              name="VK_EXT_EXTENSION_623_EXTENSION_NAME"/>
+            </require>
+        </extension>
+        <extension name="VK_WEBROGUE_surface" number="1234" type="instance" depends="VK_KHR_surface" platform="webrogue" author="WEBROGUE" contact="Artem Borovik @idk" supported="vulkan" ratified="vulkan" nofeatures="true">
+            <require>
+                <enum value="1"                                                 name="VK_WEBROGUE_SURFACE_SPEC_VERSION"/>
+                <enum value="&quot;VK_WEBROGUE_surface&quot;"                   name="VK_WEBROGUE_SURFACE_EXTENSION_NAME"/>
+                <enum offset="0" extends="VkStructureType"                      name="VK_STRUCTURE_TYPE_SURFACE_CREATE_INFO_WEBROGUE"/>
+                <type name="VkSurfaceCreateFlagsWEBROGUE"/>
+                <type name="VkSurfaceCreateInfoWEBROGUE"/>
+                <command name="vkCreateSurfaceWEBROGUE"/>
             </require>
         </extension>
         <extension name="VK_KHR_extension_624" number="624" author="KHR" contact="Matthew Netsch @mnetsch" supported="disabled">

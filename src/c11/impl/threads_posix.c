@@ -285,7 +285,8 @@ _Noreturn
 void
 thrd_exit(int res)
 {
-    pthread_exit((void*)(intptr_t)res);
+    abort();
+    // pthread_exit((void*)(intptr_t)res);
 }
 
 // 7.25.5.6

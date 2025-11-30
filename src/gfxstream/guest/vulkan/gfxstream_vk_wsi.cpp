@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include <string>
 #include "gfxstream_vk_entrypoints.h"
 #include "gfxstream_vk_private.h"
 #include "wsi_common.h"
@@ -10,6 +11,10 @@
 static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL
 gfxstream_vk_wsi_proc_addr(VkPhysicalDevice physicalDevice, const char* pName) {
     VK_FROM_HANDLE(gfxstream_vk_physical_device, pdevice, physicalDevice);
+    // Inject webrogue-specific functions there
+    // if(std::string(pName) == "vkCreateSurfaceWEBROGUE")
+    //     return (PFN_vkVoidFunction)gfxstream_vk_CreateSurfaceWEBROGUE;
+    
     return vk_instance_get_proc_addr_unchecked(&pdevice->instance->vk, pName);
 }
 

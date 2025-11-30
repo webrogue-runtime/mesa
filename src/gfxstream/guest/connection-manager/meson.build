@@ -8,6 +8,7 @@ files_libconnection_manager = files(
     'GfxStreamConnectionManager.cpp',
     'QemuPipeStreamStub.cpp',
     'VirtioGpuPipeStream.cpp',
+    'WebrogueStream.cpp',
 )
 
 libconnection_manager = static_library(

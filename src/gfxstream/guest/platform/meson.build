@@ -13,6 +13,9 @@ if system_has_kms_drm
 elif host_machine.system() == 'windows'
     subdir('windows')
     libplatform_virtgpu += libplatform_virtgpu_windows
+elif with_platform_webrogue
+  subdir('webrogue')
+  libplatform_virtgpu += libplatform_virtgpu_webrogue
 endif
 
 files_libplatform_virtgpu = files('VirtGpu.cpp')

@@ -741,6 +741,9 @@ class ResourceTracker {
         CoherentMemoryPtr coherentMemory = nullptr;
         VirtGpuResourcePtr blobPtr = nullptr;
         int importedFd = -1;
+        uint8_t* wrMappedMemory = nullptr;
+        uint64_t wrMappedMemorySize = 0;
+        uint64_t wrMappedMemoryOffset = 0;
     };
 
     struct VkCommandBuffer_Info {

@@ -31,7 +31,15 @@
 #include "wsi_common_entrypoints.h"
 #include "wsi_common_private.h"
 
+#ifndef __wasi__
 #include "drm-uapi/drm_fourcc.h"
+#else
+#define DRM_FORMAT_MOD_VENDOR_NONE    0
+#define DRM_FORMAT_RESERVED	      ((1ULL << 56) - 1)
+#define fourcc_mod_code(vendor, val) \
+	((((uint64_t)DRM_FORMAT_MOD_VENDOR_## vendor) << 56) | ((val) & 0x00ffffffffffffffULL))
+#define DRM_FORMAT_MOD_INVALID	fourcc_mod_code(NONE, DRM_FORMAT_RESERVED)
+#endif
 
 struct wsi_headless {
    struct wsi_interface base;

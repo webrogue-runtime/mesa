@@ -51,6 +51,8 @@ RESOURCE_TRACKER_ENTRIES = [
     "vkResetCommandBuffer",
     "vkCreateImageView",
     "vkCreateSampler",
+    "vkMapMemory",
+    "vkUnmapMemory",
     "vkGetPhysicalDeviceExternalFenceProperties",
     "vkGetPhysicalDeviceExternalBufferProperties",
     "vkCreateFence",
@@ -131,7 +133,8 @@ NON_AUTOGEN_ENTRYPOINTS = [
     # Use vk_common_* entrypoints; usually just dispatches to the "vk*2()" API variant
     "vkGetDeviceQueue",
     "vkGetDeviceQueue2",
-    "vkGetPhysicalDeviceProperties",
+    # TODO ?
+    # "vkGetPhysicalDeviceProperties",
     # Custom gfxstream functions
     "vkMapMemoryIntoAddressSpaceGOOGLE",
     "vkUpdateDescriptorSetWithTemplateSizedGOOGLE",

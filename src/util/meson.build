@@ -13,8 +13,8 @@ endif
 subdir('blake3')
 
 files_mesa_util = files(
-  'anon_file.h',
-  'anon_file.c',
+  # 'anon_file.h',
+  # 'anon_file.c',
   'bigmath.h',
   'bitscan.c',
   'bitscan.h',

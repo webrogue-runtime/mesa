@@ -55,6 +55,12 @@ os_dupfd_cloexec(int fd)
     */
    return dup(fd);
 }
+#elif defined(__wasi__)
+int
+os_dupfd_cloexec(int fd)
+{
+   abort();
+}
 #else
 int
 os_dupfd_cloexec(int fd)

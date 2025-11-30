@@ -92,6 +92,11 @@
 #endif
 
 
+#ifdef VK_USE_PLATFORM_WEBROGUE
+#include "vulkan_webrogue.h"
+#endif
+
+
 #ifdef VK_ENABLE_BETA_EXTENSIONS
 #include "vulkan_beta.h"
 #endif
