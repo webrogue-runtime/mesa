@@ -17,7 +17,7 @@ __attribute__((import_module("webrogue_gfx"))) void
 imported_webrogue_gfx_ret_buffer_read(const void* buf, uint32_t len);
 
 
-WebrogueStream::WebrogueStream(size_t bufsize): gfxstream::guest::IOStream(bufsize), m_buf(nullptr), m_bufsize(0) {}
+WebrogueStream::WebrogueStream(size_t bufsize): gfxstream::guest::IOStream(bufsize), m_bufsize(0), m_buf(nullptr) {}
 
 static const size_t kReadSize = 512 * 1024;
 static const size_t kWriteOffset = kReadSize;

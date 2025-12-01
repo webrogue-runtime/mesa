@@ -20,6 +20,10 @@
 #include "vk_util.h"
 #include "Resources.h"
 
+#if DETECT_OS_WASI
+#include <webroguegfx/webroguegfx.h>
+#endif
+
 uint32_t gSeqno = 0;
 uint32_t gNoRenderControlEnc = 0;
 
@@ -57,11 +61,6 @@ static GfxStreamConnectionManager* getConnectionManager(void) {
 namespace {
 
 #if DETECT_OS_WASI
-__attribute__((import_name("make_vk_surface")))
-__attribute__((import_module("webrogue_gfx"))) 
-void imported_webrogue_gfx_make_vk_surface(void* window,
-                                           uint64_t vk_instance, 
-                                           uint64_t *out_vk_surface);
 
 VKAPI_ATTR VkResult VKAPI_CALL
 wsi_CreateSurfaceWEBROGUE(
@@ -76,9 +75,7 @@ wsi_CreateSurfaceWEBROGUE(
     }
 
     uint64_t host_instance = get_host_u64_VkInstance(gfxstream_instance->internal_object);
-
-    uint64_t host_surface = 0;
-    imported_webrogue_gfx_make_vk_surface(pCreateInfo->window, host_instance, &host_surface);
+    uint64_t host_surface = webroguegfx_vulkan_make_surface((wr_window)pCreateInfo->window, host_instance);
 
     *pSurface = new_from_host_u64_VkSurfaceKHR((VkSurfaceKHR)host_surface);
     return VK_SUCCESS;
