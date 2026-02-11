@@ -21,6 +21,7 @@
 #include "util/macros.h"
 #include "virtio/virtio-gpu/virgl_hw.h"
 #include "vulkan/vulkan_core.h"
+#include <webroguegfx/webroguegfx.h>
 
 #ifdef VK_USE_PLATFORM_ANDROID_KHR
 #include "vk_format_info.h"
@@ -43,6 +44,7 @@
 #else
 #include <perfetto/tracing.h>
 #endif
+
 
 #define GFXSTREAM_TRACE_DEFAULT_CATEGORY "gfxstream.default"
 
@@ -7877,6 +7879,10 @@ static ResourceTracker* sTracker = nullptr;
 ResourceTracker::ResourceTracker() {
     mCreateMapping = new CreateMapping();
     mDestroyMapping = new DestroyMapping();
+    if(!webroguegfx_vulkan_check()) {
+        fprintf(stderr, "WebrogueGFX-Vulkan API is unavailable\n");
+        exit(1);
+    }
     // nothing to do
 }
 

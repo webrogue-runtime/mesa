@@ -6,15 +6,7 @@
 #include "WebrogueStream.h"
 #include <cstdint>
 #include <cstdlib>
-
-__attribute__((import_name("commit_buffer")))
-__attribute__((import_module("webrogue_gfx")))
-void imported_webrogue_gfx_commit_buffer(const void* buf, uint32_t len);
-
-
-__attribute__((import_name("ret_buffer_read")))
-__attribute__((import_module("webrogue_gfx"))) void
-imported_webrogue_gfx_ret_buffer_read(const void* buf, uint32_t len);
+#include <webroguegfx/webroguegfx.h>
 
 
 WebrogueStream::WebrogueStream(size_t bufsize): gfxstream::guest::IOStream(bufsize), m_bufsize(0), m_buf(nullptr) {}
@@ -67,13 +59,13 @@ int WebrogueStream::commitBuffer(size_t size) {
 }
 
 int WebrogueStream::writeFully(const void* buf, size_t len) {
-    imported_webrogue_gfx_commit_buffer(buf, len);
+    webroguegfx_vulkan_commit_buffer(buf, len);
     return 0;
 }
 
 const unsigned char* WebrogueStream::readFully(void* buf, size_t len) {
 
-    imported_webrogue_gfx_ret_buffer_read(buf, len);
+    webroguegfx_vulkan_ret_buffer_read(buf, len);
     return (const unsigned char*)buf;
 }
 

@@ -6,15 +6,12 @@
 #include <cstdlib>
 #include "WebrogueVirtGpu.h"
 #include "util/log.h"
+#include <webroguegfx/webroguegfx.h>
 
-
-__attribute__((import_name("vk_register_blob")))
-__attribute__((import_module("webrogue_gfx")))
-void imported_webrogue_gfx_vk_register_blob(uint64_t blobId, uint64_t size, void* buf);
 
 WebrogueVirtGpuResource::WebrogueVirtGpuResource(uint64_t blobId, uint64_t size) {
     buf = aligned_alloc(16*1024, size);
-    imported_webrogue_gfx_vk_register_blob(blobId, size, buf);
+    webroguegfx_vulkan_register_blob(blobId, size, buf);
 }
 
 WebrogueVirtGpuResource::~WebrogueVirtGpuResource(void) {}
