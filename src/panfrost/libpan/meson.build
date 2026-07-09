@@ -3,7 +3,7 @@
 
 
 libpan_shader_files = files(
-  'clear_afbc_metadata.cl',
+  'copy.cl',
   'query_pool.cl',
   'draw_helper.cl',
   'indirect_dispatch.cl',

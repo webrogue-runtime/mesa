@@ -8,11 +8,8 @@
 
 #include "pipe/p_video_codec.h"
 #include "radeon_vcn_enc.h"
-#include "radeon_video.h"
 #include "si_pipe.h"
 #include "util/u_video.h"
-
-#include <stdio.h>
 
 #define RENCODE_FW_INTERFACE_MAJOR_VERSION 1
 #define RENCODE_FW_INTERFACE_MINOR_VERSION 9
@@ -84,6 +81,14 @@ static void radeon_enc_slice_control(struct radeon_encoder *enc)
    RADEON_ENC_CS(enc->enc_pic.slice_ctrl.slice_control_mode);
    RADEON_ENC_CS(enc->enc_pic.slice_ctrl.num_mbs_per_slice);
    RADEON_ENC_END();
+
+   if (enc->enc_pic.slice_ctrl.slice_control_mode == RENCODE_H264_SLICE_CONTROL_MODE_VARIABLE_MBS) {
+      RADEON_ENC_BEGIN(enc->cmd.slice_info_h264);
+      RADEON_ENC_CS(enc->enc_pic.h264_slice_info_var.num_slices);
+      for (uint32_t i = 0; i < RENCODE_MAX_NUM_SLICES; i++)
+         RADEON_ENC_CS(enc->enc_pic.h264_slice_info_var.slice_info[i].num_mbs_per_slice);
+      RADEON_ENC_END();
+   }
 }
 
 static void radeon_enc_slice_control_hevc(struct radeon_encoder *enc)
@@ -93,6 +98,16 @@ static void radeon_enc_slice_control_hevc(struct radeon_encoder *enc)
    RADEON_ENC_CS(enc->enc_pic.hevc_slice_ctrl.fixed_ctbs_per_slice.num_ctbs_per_slice);
    RADEON_ENC_CS(enc->enc_pic.hevc_slice_ctrl.fixed_ctbs_per_slice.num_ctbs_per_slice_segment);
    RADEON_ENC_END();
+
+   if (enc->enc_pic.hevc_slice_ctrl.slice_control_mode == RENCODE_HEVC_SLICE_CONTROL_MODE_VARIABLE_CTBS) {
+      RADEON_ENC_BEGIN(enc->cmd.slice_info_hevc);
+      RADEON_ENC_CS(enc->enc_pic.hevc_slice_info_var.num_slice_segments);
+      for (uint32_t i = 0; i < RENCODE_MAX_NUM_SLICES; i++) {
+         RADEON_ENC_CS(enc->enc_pic.hevc_slice_info_var.slice_segment_info[i].num_ctbs_per_segment);
+         RADEON_ENC_CS(enc->enc_pic.hevc_slice_info_var.slice_segment_info[i].is_independent);
+      }
+      RADEON_ENC_END();
+   }
 }
 
 static void radeon_enc_spec_misc(struct radeon_encoder *enc)
@@ -853,7 +868,9 @@ static void radeon_enc_op_preset(struct radeon_encoder *enc)
 {
    uint32_t preset_mode;
 
-   if (enc->enc_pic.quality_modes.preset_mode == RENCODE_PRESET_MODE_QUALITY)
+   if (enc->enc_pic.quality_modes.preset_mode == RENCODE_PRESET_MODE_HIGH_QUALITY)
+      preset_mode = RENCODE_IB_OP_SET_HIGH_QUALITY_ENCODING_MODE;
+   else if (enc->enc_pic.quality_modes.preset_mode == RENCODE_PRESET_MODE_QUALITY)
       preset_mode = RENCODE_IB_OP_SET_QUALITY_ENCODING_MODE;
    else if (enc->enc_pic.quality_modes.preset_mode == RENCODE_PRESET_MODE_BALANCE)
       preset_mode = RENCODE_IB_OP_SET_BALANCE_ENCODING_MODE;
@@ -914,6 +931,8 @@ static void encode(struct radeon_encoder *enc)
    enc->session_info(enc);
    enc->total_task_size = 0;
    enc->task_info(enc, enc->need_feedback);
+
+   enc->slice_control(enc);
 
    if (enc->need_rate_control || enc->need_rc_per_pic) {
       i = 0;

@@ -316,7 +316,7 @@ static bool lower_intrinsic(nir_builder *b, nir_instr *instr, struct lower_abi_s
       break;
    }
    case nir_intrinsic_load_workgroup_size: {
-      assert(b->shader->info.workgroup_size_variable && sel->info.uses_variable_block_size);
+      assert(b->shader->info.workgroup_size_variable && shader->info.uses_sysval_workgroup_size);
 
       nir_def *block_size = ac_nir_load_arg(b, &args->ac, args->block_size);
       nir_def *comp[] = {
@@ -564,12 +564,12 @@ static bool lower_intrinsic(nir_builder *b, nir_instr *instr, struct lower_abi_s
    case nir_intrinsic_load_alpha_reference_amd:
       replacement = ac_nir_load_arg(b, &args->ac, args->alpha_reference);
       break;
-   case nir_intrinsic_load_color0:
-   case nir_intrinsic_load_color1: {
+   case nir_intrinsic_load_color0_amd:
+   case nir_intrinsic_load_color1_amd: {
       uint32_t colors_read = sel->info.colors_read;
 
       int start, offset;
-      if (intrin->intrinsic == nir_intrinsic_load_color0) {
+      if (intrin->intrinsic == nir_intrinsic_load_color0_amd) {
          start = 0;
          offset = 0;
       } else {
@@ -592,8 +592,8 @@ static bool lower_intrinsic(nir_builder *b, nir_instr *instr, struct lower_abi_s
       /* Load point coordinates (x, y) which are written by the hw after the interpolated inputs */
       nir_def *baryc = intrin->src[0].ssa;
       replacement = nir_load_interpolated_input(b, 2, 32, baryc, nir_imm_int(b, 0),
-                                                .base = si_get_ps_num_interp(shader),
-                                                .component = 2);
+                                                .component = 2,
+                                                .io_semantics.location = VARYING_SLOT_PARAM_GEN_AMD);
       break;
    }
    case nir_intrinsic_load_poly_line_smooth_enabled:

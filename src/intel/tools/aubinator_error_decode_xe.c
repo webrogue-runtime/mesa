@@ -257,6 +257,9 @@ read_xe_data_file(FILE *file,
             case XE_VM_TOPIC_TYPE_ERROR:
                printf("HWCTX not present in dump, content will be zeroed: %s\n", line);
                break;
+            case XE_VM_TOPIC_TYPE_REPLAY_OFFSET:
+            case XE_VM_TOPIC_TYPE_REPLAY_LENGTH:
+               break;
             default:
                printf("Not expected line in HWCTX: %s", line);
             }
@@ -272,12 +275,17 @@ read_xe_data_file(FILE *file,
          print_line = false;
          type = error_decode_xe_read_vm_line(line, &address, &value_ptr);
          switch (type) {
+         case XE_VM_TOPIC_TYPE_GLOBAL_VM_FLAGS: {
+            printf("VM.uapi_flags are ignored and not parsed: %s", line);
+            break;
+         }
          case XE_VM_TOPIC_TYPE_DATA: {
             if (!error_decode_xe_ascii85_decode_allocated(value_ptr, vm_entry_data, vm_entry_len))
                printf("Failed to parse VMA 0x%" PRIx64 " data\n", address);
             break;
          }
          case XE_VM_TOPIC_TYPE_LENGTH: {
+            struct xe_vma_properties props = {0};
             vm_entry_len = strtoul(value_ptr, NULL, 0);
             vm_entry_data = calloc(1, vm_entry_len);
             if (!vm_entry_data) {
@@ -285,10 +293,14 @@ read_xe_data_file(FILE *file,
                printf("Aborting decode process due to insufficient memory\n");
                goto cleanup;
             }
-            if (!error_decode_xe_vm_append(&xe_vm, address, vm_entry_len, vm_entry_data)) {
+            if (!error_decode_xe_vm_append(&xe_vm, address, vm_entry_len, &props, vm_entry_data)) {
                printf("xe_vm_append() failed for VMA 0x%" PRIx64 "\n", address);
                break;
             }
+            break;
+         }
+         case XE_VM_TOPIC_TYPE_PROPERTY: {
+            /* VMA properties are simply ignored and not parsed inside aubinator_error_decode. */
             break;
          }
          case XE_VM_TOPIC_TYPE_ERROR:

@@ -200,6 +200,28 @@ typedef enum {
     */
    nir_io_radv_intrinsic_component_workaround = BITFIELD_BIT(10),
 
+   /**
+    * nir_recompute_io_bases will assign VARYING_SLOT_COL0-1 such that
+    * their bases are after all other inputs.
+    */
+   nir_io_assign_color_input_bases_after_all_other_inputs = BITFIELD_BIT(11),
+
+   /**
+    * Whether nir_lower_io should use FRAG_RESULT_DUAL_SRC_BLEND instead of
+    * nir_io_semantics::dual_source_blend_index.
+    *
+    * This has the advantage that it behaves like a normal output and its
+    * presence is reflected in shader_info::outputs_written instead of
+    * shader_info::fs::color_is_dual_source.
+    */
+   nir_io_use_frag_result_dual_src_blend = BITFIELD_BIT(12),
+
+   /**
+    * Whether the implementation can compact 16-bit values in the higher
+    * 32-bits of a varying.
+    */
+   nir_io_compact_to_higher_16 = BITFIELD_BIT(13),
+
    /* Options affecting the GLSL compiler or Gallium are below. */
 
    /**
@@ -220,6 +242,15 @@ typedef enum {
    nir_lower_packing_op_unpack_32_4x8,
    nir_lower_packing_num_ops,
 } nir_lower_packing_op;
+
+typedef enum {
+   /* Build: frag_coord */
+   nir_frag_coord_regular,
+   /* Build: frag_coord_xy, frag_coord_z, frag_coord_w */
+   nir_frag_coord_xy_z_w_separate,
+   /* Build: frag_coord_xy, frag_coord_z, frcp(frag_coord_w_rcp) */
+   nir_frag_coord_xy_z_w_rcp_separate,
+} nir_frag_coord_form;
 
 typedef struct nir_shader_compiler_options {
    bool lower_fdiv;
@@ -268,9 +299,6 @@ typedef struct nir_shader_compiler_options {
 
    /* lower {slt,sge,seq,sne} to {flt,fge,feq,fneu} + b2f: */
    bool lower_scmp;
-
-   /* lower b/fall_equalN/b/fany_nequalN (ex:fany_nequal4 to sne+fdot4+fsat) */
-   bool lower_vector_cmp;
 
    /** enable rules to avoid bit ops */
    bool lower_bitops;
@@ -323,8 +351,6 @@ typedef struct nir_shader_compiler_options {
     * hardware.
     */
    bool lower_fround_even;
-
-   bool lower_ldexp;
 
    bool lower_pack_half_2x16;
    bool lower_pack_unorm_2x16;
@@ -521,6 +547,9 @@ typedef struct nir_shader_compiler_options {
    /* Lowers when 32x32->64 bit multiplication is not supported */
    bool lower_mul_2x32_64;
 
+   /* Indicates that ldexp is supported. */
+   bool has_ldexp;
+
    /* Indicates that urol and uror are supported */
    bool has_rotate8;
    bool has_rotate16;
@@ -590,6 +619,9 @@ typedef struct nir_shader_compiler_options {
    /** Backend supports pack_32_4x8 or pack_32_4x8_split. */
    bool has_pack_32_4x8;
 
+   /** Backend supports nir_load_pixel_coord */
+   bool has_pixel_coord;
+
    /** Backend supports nir_load_texture_scale and prefers it over txs for nir
     * lowerings. */
    bool has_texture_scaling;
@@ -626,6 +658,11 @@ typedef struct nir_shader_compiler_options {
     * FLOAT_CONTROLS_DENORM_PRESERVE_FP32 is not set
     */
    bool has_fmulz_no_denorms;
+
+   /** Backend supports fcanonicalize, if not set fcanonicalize will be lowered
+    * to fmul(a, 1.0)
+    */
+   bool has_fcanonicalize;
 
    /** Backend supports 32bit ufind_msb_rev and ifind_msb_rev. */
    bool has_find_msb_rev;
@@ -741,6 +778,12 @@ typedef struct nir_shader_compiler_options {
    uint8_t support_indirect_outputs;
 
    /**
+    * If set, the maximum MSAA sample count supported -- can hint loop unrolling
+    * to optimistically unroll a loop doing txf_ms per sample.
+    */
+   uint8_t max_samples;
+
+   /**
     * Lower fmulz to `min(abs(a), abs(b)) == 0.0 ? 0.0 : a * b`.
     */
    bool lower_fmulz_with_abs_min;
@@ -768,6 +811,9 @@ typedef struct nir_shader_compiler_options {
 
    /** Lower VARYING_SLOT_LAYER in FS to SYSTEM_VALUE_LAYER_ID. */
    bool lower_layer_fs_input_to_sysval;
+
+   /** How nir_build_frag_coord generates frag_coord. */
+   nir_frag_coord_form frag_coord_form;
 
    /** clip/cull distance and tess level arrays use compact semantics */
    bool compact_arrays;
@@ -825,6 +871,12 @@ typedef struct nir_shader_compiler_options {
    void (*lower_mediump_io)(struct nir_shader *nir);
 
    /**
+    * If driver wishes to control which @convert_alu_types to lower, it
+    * can implement this callback.
+    */
+   bool (*lower_convert_alu_types)(nir_intrinsic_instr *convert_alu_types);
+
+   /**
     * Return the maximum cost of an expression that's written to a shader
     * output that can be moved into the next shader to remove that output.
     *
@@ -835,7 +887,7 @@ typedef struct nir_shader_compiler_options {
     * outputs to inputs.
     *
     * Drivers can set the maximum cost based on the types of consecutive
-    * shaders or shader SHA1s.
+    * shaders or shader BLAKE3s.
     *
     * Drivers should also set "varying_estimate_instr_cost".
     */

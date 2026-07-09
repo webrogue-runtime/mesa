@@ -81,6 +81,8 @@ kk_get_image_plane_format_features(struct kk_physical_device *pdev,
 
    if (va_format->write) {
       features |= VK_FORMAT_FEATURE_2_STORAGE_IMAGE_BIT;
+      features |= VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT;
+      features |= VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT;
    }
 
    if (va_format->atomic)
@@ -602,18 +604,9 @@ kk_CreateImage(VkDevice _device, const VkImageCreateInfo *pCreateInfo,
    struct kk_image *image;
    VkResult result;
 
-#ifdef KK_USE_WSI_PLATFORM
-   /* Ignore swapchain creation info on Android. Since we don't have an
-    * implementation in Mesa, we're guaranteed to access an Android object
-    * incorrectly.
-    */
-   const VkImageSwapchainCreateInfoKHR *swapchain_info =
-      vk_find_struct_const(pCreateInfo->pNext, IMAGE_SWAPCHAIN_CREATE_INFO_KHR);
-   if (swapchain_info && swapchain_info->swapchain != VK_NULL_HANDLE) {
-      return wsi_common_create_swapchain_image(
-         &pdev->wsi_device, pCreateInfo, swapchain_info->swapchain, pImage);
-   }
-#endif
+   if (wsi_common_is_swapchain_image(pCreateInfo))
+      return wsi_common_create_swapchain_image(&pdev->wsi_device, pCreateInfo,
+                                               pImage);
 
    image = vk_zalloc2(&dev->vk.alloc, pAllocator, sizeof(*image), 8,
                       VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
@@ -852,12 +845,11 @@ kk_image_plane_bind(struct kk_device *dev, struct kk_image *image,
    /* Create auxiliary 2D array texture for 3D images so we can use 2D views of
     * it */
    if (plane->layout.type == MTL_TEXTURE_TYPE_3D &&
-       (image->vk.create_flags & VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT)) {
+       (image->vk.create_flags &
+        (VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT |
+         VK_IMAGE_CREATE_2D_VIEW_COMPATIBLE_BIT_EXT))) {
       struct kk_image_layout array_layout = plane->layout;
       array_layout.type = MTL_TEXTURE_TYPE_2D_ARRAY;
-      // TODO_KOSMICKRISP We need to make sure that this doesn't go over Metal's
-      // layer maximum which is 2048. Probably by limiting the dimensions and
-      // layers for 3D images
       array_layout.layers = array_layout.layers * array_layout.depth_px;
       array_layout.depth_px = 1u;
       plane->mtl_handle_array = mtl_new_texture_with_descriptor(

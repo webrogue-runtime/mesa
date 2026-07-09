@@ -570,6 +570,7 @@ zink_start_batch(struct zink_context *ctx)
 
    bs->fence.completed = false;
 
+#if HAVE_RENDERDOC_INTEGRATION
    if (VKCTX(CmdInsertDebugUtilsLabelEXT) && screen->renderdoc_api) {
       VkDebugUtilsLabelEXT capture_label;
       /* Magic fallback which lets us bridge the Wine barrier over to Linux RenderDoc. */
@@ -588,6 +589,7 @@ zink_start_batch(struct zink_context *ctx)
       screen->renderdoc_api->StartFrameCapture(RENDERDOC_DEVICEPOINTER_FROM_VKINSTANCE(screen->instance), NULL);
       screen->renderdoc_capturing = true;
    }
+#endif
 
    /* descriptor buffers must always be bound at the start of a batch */
    if (zink_descriptor_mode == ZINK_DESCRIPTOR_MODE_DB && !(ctx->flags & ZINK_CONTEXT_COPY_ONLY))
@@ -699,6 +701,23 @@ submit_queue(void *data, void *gdata, int thread_index)
    };
    if (si[ZINK_SUBMIT_CMDBUF].waitSemaphoreCount)
       si[ZINK_SUBMIT_CMDBUF].pNext = &sem_submit;
+   {
+      VkCommandBuffer sync_cmdbuf = bs->has_work ? bs->cmdbuf :
+                                                   bs->has_reordered_work ? bs->reordered_cmdbuf :
+                                                                            bs->has_unsync ? bs->unsynchronized_cmdbuf :
+                                                                                             VK_NULL_HANDLE;
+      if (sync_cmdbuf) {
+         VkMemoryBarrier mb;
+         mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+         mb.pNext = NULL;
+         mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+         mb.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+         VKSCR(CmdPipelineBarrier)(sync_cmdbuf,
+                                   VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                   VK_PIPELINE_STAGE_HOST_BIT,
+                                   0, 1, &mb, 0, NULL, 0, NULL);
+      }
+   }
    VkCommandBuffer cmdbufs[3];
    unsigned c = 0;
    if (bs->has_unsync)
@@ -809,8 +828,10 @@ submit_queue(void *data, void *gdata, int thread_index)
    VkSemaphore *sem = bs->signal_semaphores.data;
    set_foreach(&bs->dmabuf_exports, entry) {
       struct zink_resource *res = (void*)entry->key;
-      for (; res; res = zink_resource(res->base.b.next))
-         zink_screen_import_dmabuf_semaphore(screen, res, sem[i++]);
+      if (res->obj->exportable_dmabuf) {
+         for (; res; res = zink_resource(res->base.b.next))
+            zink_screen_import_dmabuf_semaphore(screen, res, sem[i++]);
+      }
 
       struct pipe_resource *pres = (void*)entry->key;
       pipe_resource_reference(&pres, NULL);
@@ -940,11 +961,13 @@ zink_end_batch(struct zink_context *ctx)
       submit_queue(bs, NULL, 0);
    }
 
+#if HAVE_RENDERDOC_INTEGRATION
    if (!(ctx->flags & ZINK_CONTEXT_COPY_ONLY) && screen->renderdoc_capturing && !screen->renderdoc_capture_all &&
        p_atomic_read(&screen->renderdoc_frame) > screen->renderdoc_capture_end) {
       screen->renderdoc_api->EndFrameCapture(RENDERDOC_DEVICEPOINTER_FROM_VKINSTANCE(screen->instance), NULL);
       screen->renderdoc_capturing = false;
    }
+#endif
 }
 
 static int

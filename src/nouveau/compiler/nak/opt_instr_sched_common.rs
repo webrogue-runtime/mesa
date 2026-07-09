@@ -213,6 +213,7 @@ pub fn side_effect_type(op: &Op) -> SideEffect {
         | Op::TexDepBar(_)
         | Op::CS2R(_)
         | Op::Isberd(_)
+        | Op::Isbewr(_)
         | Op::ViLd(_)
         | Op::Kill(_)
         | Op::S2R(_) => SideEffect::Barrier,
@@ -253,7 +254,11 @@ pub fn estimate_block_weight(cfg: &CFG<BasicBlock>, block_idx: usize) -> u64 {
 /// Memory instructions were copied from L1 data cache latencies.
 /// For instructions not mentioned in the paper, I made up numbers.
 /// This could probably be improved.
-pub fn estimate_variable_latency(sm: u8, op: &Op) -> u32 {
+pub fn estimate_variable_latency(sm: &ShaderModelInfo, op: &Op) -> u32 {
+    if !sm.op_needs_scoreboard(op) {
+        return 0;
+    }
+
     match op {
         // Multi-function unit
         Op::Rro(_) | Op::MuFu(_) => 15,
@@ -265,7 +270,7 @@ pub fn estimate_variable_latency(sm: u8, op: &Op) -> u32 {
         // Integer ALU
         Op::BRev(_) | Op::Flo(_) | Op::PopC(_) => 15,
         Op::IMad(_) | Op::IMul(_) => {
-            assert!(sm < 70);
+            assert!(sm.sm() < 70);
             86
         }
 
@@ -325,6 +330,7 @@ pub fn estimate_variable_latency(sm: u8, op: &Op) -> u32 {
         | Op::TexDepBar(_)
         | Op::CS2R(_)
         | Op::Isberd(_)
+        | Op::Isbewr(_)
         | Op::ViLd(_)
         | Op::Kill(_)
         | Op::PixLd(_)

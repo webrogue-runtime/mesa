@@ -17,7 +17,7 @@
 #include "kosmickrisp/bridge/mtl_bridge.h"
 
 #include "util/disk_cache.h"
-#include "util/mesa-sha1.h"
+#include "util/mesa-blake3.h"
 #include "git_sha1.h"
 
 #include "vulkan/wsi/wsi_common.h"
@@ -66,7 +66,7 @@ kk_get_device_extensions(const struct kk_instance *instance,
       .KHR_buffer_device_address = true, /* Required in Vulkan 1.3 */
       .KHR_create_renderpass2 = true,
       .KHR_depth_stencil_resolve = true,
-      .KHR_draw_indirect_count = false,
+      .KHR_draw_indirect_count = true,
       .KHR_driver_properties = true,
       .KHR_image_format_list = true,
       .KHR_imageless_framebuffer = true,
@@ -74,13 +74,13 @@ kk_get_device_extensions(const struct kk_instance *instance,
       .KHR_separate_depth_stencil_layouts = true,
       .KHR_shader_atomic_int64 = false,
       .KHR_shader_float_controls = true,
-      .KHR_shader_float16_int8 =
-         false, /* TODO_KOSMICKRISP shaderInt8 shaderFloat16 */
+      .KHR_shader_float16_int8 = true,
       .KHR_shader_subgroup_extended_types = true,
       .KHR_spirv_1_4 = true,
       .KHR_timeline_semaphore = true,
       .KHR_uniform_buffer_standard_layout = true,
       .KHR_vulkan_memory_model = true, /* Required in Vulkan 1.3 */
+      .EXT_buffer_device_address = true,
       .EXT_descriptor_indexing = true,
       .EXT_host_query_reset = true,
       .EXT_sampler_filter_minmax = false,
@@ -98,9 +98,9 @@ kk_get_device_extensions(const struct kk_instance *instance,
       .KHR_shader_terminate_invocation = true,
       .KHR_synchronization2 = true,
       .KHR_zero_initialize_workgroup_memory = true,
-      .EXT_4444_formats = false,
+      .EXT_4444_formats = true,
       .EXT_extended_dynamic_state = true,
-      .EXT_extended_dynamic_state2 = false,
+      .EXT_extended_dynamic_state2 = true,
       .EXT_image_robustness = true,
       .EXT_inline_uniform_block = true,
       .EXT_pipeline_creation_cache_control = true,
@@ -109,18 +109,24 @@ kk_get_device_extensions(const struct kk_instance *instance,
       .EXT_shader_demote_to_helper_invocation = true,
       .EXT_shader_stencil_export = true,
       .EXT_subgroup_size_control = true,
-      .EXT_texel_buffer_alignment = false,
-      .EXT_texture_compression_astc_hdr = false,
+      .EXT_texel_buffer_alignment = true,
+      .EXT_texture_compression_astc_hdr = true,
       .EXT_tooling_info = true,
-      .EXT_ycbcr_2plane_444_formats = false,
+      .EXT_ycbcr_2plane_444_formats = true,
 
       /* Vulkan 1.4 */
+      .KHR_global_priority = true,
+      .KHR_load_store_op_none = true,
+      .KHR_map_memory2 = true,
       .KHR_push_descriptor = true,
       .KHR_shader_expect_assume = true,
       .KHR_vertex_attribute_divisor = true,
+      .EXT_global_priority = true,
+      .EXT_global_priority_query = true,
       .EXT_vertex_attribute_divisor = true,
 
       /* Optional extensions */
+      .KHR_calibrated_timestamps = true,
       .KHR_shader_maximal_reconvergence = true,
       .KHR_shader_relaxed_extended_instruction = true,
       .KHR_shader_subgroup_uniform_control_flow = true,
@@ -130,7 +136,12 @@ kk_get_device_extensions(const struct kk_instance *instance,
 #endif
       .KHR_workgroup_memory_explicit_layout = true,
 
+      .EXT_calibrated_timestamps = true,
+      .EXT_depth_clip_control = true,
+      .EXT_extended_dynamic_state3 = true,
       .EXT_external_memory_metal = true,
+      .EXT_image_2d_view_of_3d = true,
+      .EXT_load_store_op_none = true,
       .EXT_mutable_descriptor_type = true,
       .EXT_shader_atomic_float = true,
       .EXT_shader_replicated_composites = true,
@@ -138,6 +149,10 @@ kk_get_device_extensions(const struct kk_instance *instance,
       .GOOGLE_decorate_string = true,
       .GOOGLE_hlsl_functionality1 = true,
       .GOOGLE_user_type = true,
+      .KHR_external_fence_fd = true,
+      .KHR_external_semaphore_fd = true,
+
+      .AMD_shader_image_load_store_lod = true,
    };
 }
 
@@ -149,40 +164,38 @@ kk_get_device_features(
    *features = (struct vk_features){
       /* Vulkan 1.0 */
       .alphaToOne = true,
+      .depthBiasClamp = true,
       .depthClamp = true,
       .drawIndirectFirstInstance = true,
       .dualSrcBlend = true,
-      /* TODO_KOSMICKRISP
-       * Enabling fragmentStoresAndAtomics fails the following CTS tests, need
-       * to investigate:
-       * dEQP-VK.fragment_operations.early_fragment.discard_no_early_fragment_tests_depth
-       * dEQP-VK.robustness.image_robustness.bind.notemplate.*i.unroll.nonvolatile.sampled_image.no_fmt_qual.img.samples_1.*d_array.frag
-       */
-      .fragmentStoresAndAtomics = false,
+      .fragmentStoresAndAtomics = true,
+      .fullDrawIndexUint32 = true,
       .imageCubeArray = true,
       .independentBlend = true,
+      .inheritedQueries = true,
+      .largePoints = true,
       .logicOp = true,
       .multiViewport = true,
+      .occlusionQueryPrecise = true,
       .robustBufferAccess = true,
       .samplerAnisotropy = true,
+      .sampleRateShading = true,
+      .shaderClipDistance = true,
+      .shaderImageGatherExtended = true,
       .shaderInt16 = true,
       .shaderInt64 = true,
       .shaderResourceMinLod = true,
       .shaderSampledImageArrayDynamicIndexing = true,
       .shaderStorageBufferArrayDynamicIndexing = true,
       .shaderStorageImageArrayDynamicIndexing = true,
-      /* TODO_KOSMICKRISP
-       * Disabled because the following test
-       * dEQP-VK.api.format_feature_flags2.r8_unorm and similars fail, need to
-       * set VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT and
-       * VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT for those formats.
-       * This may trigger more tests that haven't been run yet */
-      .shaderStorageImageReadWithoutFormat = false,
-      .shaderStorageImageWriteWithoutFormat = false,
+      .shaderStorageImageExtendedFormats = true,
+      .shaderStorageImageReadWithoutFormat = true,
+      .shaderStorageImageWriteWithoutFormat = true,
       .shaderUniformBufferArrayDynamicIndexing = true,
       .textureCompressionASTC_LDR = true,
       .textureCompressionBC = true,
       .textureCompressionETC2 = true,
+      .vertexPipelineStoresAndAtomics = true,
 
       /* Vulkan 1.1 */
       .multiview = true,
@@ -211,6 +224,7 @@ kk_get_device_features(
       .descriptorBindingUpdateUnusedWhilePending = true,
       .descriptorBindingVariableDescriptorCount = true,
       .descriptorIndexing = true,
+      .drawIndirectCount = true,
       .hostQueryReset = true,
       .imagelessFramebuffer = true,
       .multiDrawIndirect = true,
@@ -218,25 +232,10 @@ kk_get_device_features(
       .samplerMirrorClampToEdge = true,
       .scalarBlockLayout = true,
       .separateDepthStencilLayouts = true,
-      /* TODO_KOSMICKRISP shaderFloat16
-       * Failing:
-       * dEQP-VK.spirv_assembly.instruction.*.float16.opcompositeinsert.*
-       * dEQP-VK.memory_model.shared.16bit.nested_structs_arrays.*
-       */
-      .shaderFloat16 = false,
+      .shaderFloat16 = true,
       .shaderInputAttachmentArrayDynamicIndexing = true,
       .shaderInputAttachmentArrayNonUniformIndexing = true,
-      /* TODO_KOSMICKRISP shaderInt8
-       * Multiple MSL compiler crashes if we enable shaderInt8, need to
-       * understand why and a workaround:
-       * dEQP-VK.memory_model.shared.8bit.vector_types.9
-       * dEQP-VK.memory_model.shared.8bit.basic_types.8
-       * dEQP-VK.memory_model.shared.8bit.basic_arrays.2
-       * dEQP-VK.memory_model.shared.8bit.arrays_of_arrays.1
-       * dEQP-VK.memory_model.shared.8bit.arrays_of_arrays.8
-       * Probably more
-       */
-      .shaderInt8 = false,
+      .shaderInt8 = true,
       .shaderOutputLayer = true,
       .shaderOutputViewportIndex = true,
       .shaderSampledImageArrayNonUniformIndexing = true,
@@ -259,6 +258,10 @@ kk_get_device_features(
       .bufferDeviceAddress = true,
       .computeFullSubgroups = true,
       .dynamicRendering = true,
+      .extendedDynamicState = true,
+      .extendedDynamicState2 = true,
+      .extendedDynamicState2LogicOp = false,
+      .extendedDynamicState2PatchControlPoints = false,
       .inlineUniformBlock = true,
       .maintenance4 = true,
       .pipelineCreationCacheControl = true,
@@ -270,10 +273,14 @@ kk_get_device_features(
       .shaderZeroInitializeWorkgroupMemory = true,
       .subgroupSizeControl = true,
       .synchronization2 = true,
+      .texelBufferAlignment = true,
+      .textureCompressionASTC_HDR = true,
       .vulkanMemoryModel = true,
       .vulkanMemoryModelDeviceScope = true,
 
       /* Vulkan 1.4 */
+      .globalPriorityQuery = true,
+      .pushDescriptor = true,
       .vertexAttributeInstanceRateDivisor = true,
       .vertexAttributeInstanceRateZeroDivisor = true,
 
@@ -295,6 +302,21 @@ kk_get_device_features(
       .workgroupMemoryExplicitLayout8BitAccess = true,
       .workgroupMemoryExplicitLayout16BitAccess = true,
 
+      /* EXT_4444_formats */
+      .formatA4R4G4B4 = true,
+      .formatA4B4G4R4 = true,
+
+      /* VK_EXT_depth_clip_control */
+      .depthClipControl = true,
+
+      /* VK_EXT_extended_dynamic_state3 */
+      .extendedDynamicState3DepthClampEnable = true,
+      .extendedDynamicState3DepthClipNegativeOneToOne = true,
+
+      /* EXT_image_2d_view_of_3d */
+      .image2DViewOf3D = true,
+      .sampler2DViewOf3D = true,
+
       /* VK_EXT_shader_replicated_composites */
       .shaderReplicatedComposites = true,
 
@@ -305,6 +327,9 @@ kk_get_device_features(
       .shaderBufferFloat32Atomics = true,
       .shaderBufferFloat32AtomicAdd = true,
       .shaderSharedFloat32Atomics = true,
+
+      /* EXT_ycbcr_2plane_444_formats */
+      .ycbcr2plane444Formats = true,
    };
 }
 
@@ -341,7 +366,7 @@ kk_get_device_properties(const struct kk_physical_device *pdev,
       .maxImageDimension3D = kk_image_max_dimension(VK_IMAGE_TYPE_3D),
       .maxImageDimensionCube = 16384,
       .maxImageArrayLayers = 2048,
-      .maxTexelBufferElements = 256 * 1024 * 1024,
+      .maxTexelBufferElements = 16384 * 16384,
       .maxUniformBufferRange = 65536,
       .maxStorageBufferRange = UINT32_MAX,
       .maxPushConstantsSize = KK_MAX_PUSH_SIZE,
@@ -386,8 +411,8 @@ kk_get_device_properties(const struct kk_physical_device *pdev,
       .maxFragmentInputComponents = 128,
       .maxFragmentOutputAttachments = KK_MAX_RTS,
       .maxFragmentDualSrcAttachments = 1,
-      .maxFragmentCombinedOutputResources = 16,
-      .maxComputeSharedMemorySize = KK_MAX_SHARED_SIZE,
+      .maxFragmentCombinedOutputResources = KK_MAX_DESCRIPTORS,
+      .maxComputeSharedMemorySize = pdev->info.max_compute_shared_memory_size,
       .maxComputeWorkGroupCount = {0x7fffffff, 65535, 65535},
       .maxComputeWorkGroupInvocations = pdev->info.max_workgroup_invocations,
       .maxComputeWorkGroupSize = {pdev->info.max_workgroup_count[0],
@@ -397,7 +422,7 @@ kk_get_device_properties(const struct kk_physical_device *pdev,
       .subTexelPrecisionBits = 8,
       .mipmapPrecisionBits = 8,
       .maxDrawIndexedIndexValue = UINT32_MAX,
-      .maxDrawIndirectCount = UINT32_MAX,
+      .maxDrawIndirectCount = UINT16_MAX,
       .maxSamplerLodBias = 15,
       .maxSamplerAnisotropy = 16,
       .maxViewports = KK_MAX_VIEWPORTS,
@@ -410,8 +435,8 @@ kk_get_device_properties(const struct kk_physical_device *pdev,
       .minStorageBufferOffsetAlignment = KK_MIN_SSBO_ALIGNMENT,
       .minTexelOffset = -8,
       .maxTexelOffset = 7,
-      .minTexelGatherOffset = -32,
-      .maxTexelGatherOffset = 31,
+      .minTexelGatherOffset = -8,
+      .maxTexelGatherOffset = 7,
       .minInterpolationOffset = -0.5,
       .maxInterpolationOffset = 0.4375,
       .subPixelInterpolationOffsetBits = 4,
@@ -435,9 +460,9 @@ kk_get_device_properties(const struct kk_physical_device *pdev,
       .maxCullDistances = 8,
       .maxCombinedClipAndCullDistances = 8,
       .discreteQueuePriorities = 2,
-      .pointSizeRange = {1.0f, 1.0f},
+      .pointSizeRange = {1.0f, 511.0f},
       .lineWidthRange = {1.0f, 1.0f},
-      .pointSizeGranularity = 0.0f,
+      .pointSizeGranularity = 0.0625f,
       .lineWidthGranularity = 0.0f,
       .strictLines = false,
       .standardSampleLocations = true,
@@ -470,7 +495,7 @@ kk_get_device_properties(const struct kk_physical_device *pdev,
       .maxMultiviewViewCount = KK_MAX_MULTIVIEW_VIEW_COUNT,
       .maxMultiviewInstanceIndex = UINT32_MAX,
       .maxPerSetDescriptors = UINT32_MAX,
-      .maxMemoryAllocationSize = (1u << 31),
+      .maxMemoryAllocationSize = pdev->info.max_buffer_size,
 
       /* Vulkan 1.2 properties */
       .supportedDepthResolveModes =
@@ -536,7 +561,7 @@ kk_get_device_properties(const struct kk_physical_device *pdev,
       .maxSubgroupSize = 32,
       .maxComputeWorkgroupSubgroups = pdev->info.max_workgroup_invocations / 32,
       .requiredSubgroupSizeStages = 0,
-      .maxInlineUniformBlockSize = 1 << 16,
+      .maxInlineUniformBlockSize = KK_MAX_INLINE_UNIFORM_BLOCK_SIZE,
       .maxPerStageDescriptorInlineUniformBlocks = 32,
       .maxPerStageDescriptorUpdateAfterBindInlineUniformBlocks = 32,
       .maxDescriptorSetInlineUniformBlocks = 6 * 32,
@@ -549,7 +574,7 @@ kk_get_device_properties(const struct kk_physical_device *pdev,
       .storageTexelBufferOffsetSingleTexelAlignment = false,
       .uniformTexelBufferOffsetAlignmentBytes = KK_MIN_TEXEL_BUFFER_ALIGNMENT,
       .uniformTexelBufferOffsetSingleTexelAlignment = false,
-      .maxBufferSize = KK_MAX_BUFFER_SIZE,
+      .maxBufferSize = pdev->info.max_buffer_size,
 
       /* VK_KHR_push_descriptor */
       .maxPushDescriptors = KK_MAX_PUSH_DESCRIPTORS,
@@ -724,18 +749,18 @@ kk_physical_device_init_pipeline_cache(struct kk_physical_device *pdev)
 {
    struct kk_instance *instance = kk_physical_device_instance(pdev);
 
-   struct mesa_sha1 sha_ctx;
-   _mesa_sha1_init(&sha_ctx);
+   blake3_hasher blake3_ctx;
+   _mesa_blake3_init(&blake3_ctx);
 
-   _mesa_sha1_update(&sha_ctx, instance->driver_build_sha,
-                     sizeof(instance->driver_build_sha));
+   _mesa_blake3_update(&blake3_ctx, instance->driver_build_sha,
+                       sizeof(instance->driver_build_sha));
 
-   unsigned char sha[SHA1_DIGEST_LENGTH];
-   _mesa_sha1_final(&sha_ctx, sha);
+   unsigned char blake3[BLAKE3_KEY_LEN];
+   _mesa_blake3_final(&blake3_ctx, blake3);
 
-   STATIC_ASSERT(SHA1_DIGEST_LENGTH >= VK_UUID_SIZE);
-   memcpy(pdev->vk.properties.pipelineCacheUUID, sha, VK_UUID_SIZE);
-   memcpy(pdev->vk.properties.shaderBinaryUUID, sha, VK_UUID_SIZE);
+   STATIC_ASSERT(BLAKE3_KEY_LEN >= VK_UUID_SIZE);
+   memcpy(pdev->vk.properties.pipelineCacheUUID, blake3, VK_UUID_SIZE);
+   memcpy(pdev->vk.properties.shaderBinaryUUID, blake3, VK_UUID_SIZE);
 }
 
 static void
@@ -785,6 +810,11 @@ get_metal_limits(struct kk_physical_device *pdev)
    pdev->info.max_workgroup_count[2] = workgroup_size.z;
    pdev->info.max_workgroup_invocations =
       MAX3(workgroup_size.x, workgroup_size.y, workgroup_size.z);
+
+   pdev->info.max_compute_shared_memory_size =
+      mtl_device_max_threadgroup_memory_length(pdev->mtl_dev_handle);
+   pdev->info.max_buffer_size =
+      mtl_device_max_buffer_length(pdev->mtl_dev_handle);
 }
 
 VkResult
@@ -830,6 +860,8 @@ kk_enumerate_physical_devices(struct vk_instance *_instance)
                                     &properties, &dispatch_table);
    if (result != VK_SUCCESS)
       goto fail_mtl_dev;
+
+   kk_physical_device_init_pipeline_cache(pdev);
 
    uint64_t sysmem_size_B = kk_get_sysmem_heap_size();
    if (sysmem_size_B == 0) {
@@ -1011,33 +1043,24 @@ kk_GetPhysicalDeviceQueueFamilyProperties2(
             0; /* TODO_KOSMICKRISP Timestamp queries */
          p->queueFamilyProperties.minImageTransferGranularity =
             (VkExtent3D){1, 1, 1};
+
+         vk_foreach_struct(ext, p->pNext)
+         {
+            switch (ext->sType) {
+            case VK_STRUCTURE_TYPE_QUEUE_FAMILY_GLOBAL_PRIORITY_PROPERTIES: {
+               VkQueueFamilyGlobalPriorityProperties *p = (void *)ext;
+               p->priorityCount = 1;
+               p->priorities[0] = VK_QUEUE_GLOBAL_PRIORITY_MEDIUM;
+               break;
+            }
+
+            default:
+               vk_debug_ignored_stype(ext->sType);
+               break;
+            }
+         }
       }
    }
-}
-
-static const VkTimeDomainKHR kk_time_domains[] = {
-   VK_TIME_DOMAIN_DEVICE_KHR,
-   VK_TIME_DOMAIN_CLOCK_MONOTONIC_KHR,
-#ifdef CLOCK_MONOTONIC_RAW
-   VK_TIME_DOMAIN_CLOCK_MONOTONIC_RAW_KHR,
-#endif
-};
-
-VKAPI_ATTR VkResult VKAPI_CALL
-kk_GetPhysicalDeviceCalibrateableTimeDomainsKHR(VkPhysicalDevice physicalDevice,
-                                                uint32_t *pTimeDomainCount,
-                                                VkTimeDomainKHR *pTimeDomains)
-{
-   VK_OUTARRAY_MAKE_TYPED(VkTimeDomainKHR, out, pTimeDomains, pTimeDomainCount);
-
-   for (int d = 0; d < ARRAY_SIZE(kk_time_domains); d++) {
-      vk_outarray_append_typed(VkTimeDomainKHR, &out, i)
-      {
-         *i = kk_time_domains[d];
-      }
-   }
-
-   return vk_outarray_status(&out);
 }
 
 VKAPI_ATTR void VKAPI_CALL

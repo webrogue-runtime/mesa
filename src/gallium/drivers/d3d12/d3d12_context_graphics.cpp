@@ -2026,7 +2026,7 @@ d3d12_clear_render_target(struct pipe_context *pctx,
                                           clear_color, 1, &rect);
       ctx->has_commands = true;
       d3d12_batch_reference_surface_texture(d3d12_current_batch(ctx), surf);
-      d3d12_surface_destroy(surf);
+      d3d12_surface_destroy(NULL, &surf->base);
    }
 
 
@@ -2075,12 +2075,13 @@ d3d12_clear_depth_stencil(struct pipe_context *pctx,
    if (!render_condition_enabled && ctx->current_predication) {
       d3d12_enable_predication(ctx);
    }
-   d3d12_surface_destroy(surf);
+   d3d12_surface_destroy(NULL, &surf->base);
 }
 
 static void
 d3d12_clear(struct pipe_context *pctx,
             unsigned buffers,
+            uint32_t color_clear_mask, uint8_t stencil_clear_mask,
             const struct pipe_scissor_state *scissor_state,
             const union pipe_color_union *color,
             double depth, unsigned stencil)
@@ -2091,7 +2092,7 @@ d3d12_clear(struct pipe_context *pctx,
       for (int i = 0; i < ctx->fb.nr_cbufs; ++i) {
          if (buffers & (PIPE_CLEAR_COLOR0 << i)) {
             struct pipe_surface *psurf = &ctx->fb.cbufs[i];
-            uint16_t width, height;
+            unsigned width, height;
             pipe_surface_size(psurf, &width, &height);
             d3d12_clear_render_target(pctx, psurf, color,
                                       0, 0, width, height,
@@ -2102,7 +2103,7 @@ d3d12_clear(struct pipe_context *pctx,
 
    if (buffers & PIPE_CLEAR_DEPTHSTENCIL && ctx->fb.zsbuf.texture) {
       struct pipe_surface *psurf = &ctx->fb.zsbuf;
-      uint16_t width, height;
+      unsigned width, height;
       pipe_surface_size(psurf, &width, &height);
       d3d12_clear_depth_stencil(pctx, psurf,
                                 buffers & PIPE_CLEAR_DEPTHSTENCIL,

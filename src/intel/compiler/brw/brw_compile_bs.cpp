@@ -83,13 +83,18 @@ compile_single_bs(const struct brw_compiler *compiler,
     */
    const unsigned required_width = compiler->devinfo->ver >= 20 ? 16u : 8u;
 
-   brw_nir_apply_key(shader, compiler, &key->base, required_width);
+   brw_pass_tracker pt_ = {
+      .nir = shader,
+      .dispatch_width = required_width,
+      .compiler = compiler,
+      .key = &key->base,
+      .archiver = params->base.archiver,
+   }, *pt = &pt_;
 
-   brw_debug_archive_nir(params->base.archiver, shader, required_width, "first");
+   BRW_NIR_SNAPSHOT("first");
+   brw_nir_apply_key(pt, &key->base, required_width);
 
-   brw_postprocess_nir(shader, compiler, required_width,
-                       params->base.archiver, debug_enabled,
-                       key->base.robust_flags);
+   brw_postprocess_nir(pt, debug_enabled);
 
    const brw_shader_params shader_params = {
       .compiler                = compiler,
@@ -143,7 +148,6 @@ brw_compile_bs(const struct brw_compiler *compiler,
    brw_prog_data_init(&prog_data->base, &params->base);
 
    prog_data->max_stack_size = 0;
-   prog_data->num_resume_shaders = num_resume_shaders;
 
    brw_generator g(compiler, &params->base, &prog_data->base,
                   shader->info.stage);

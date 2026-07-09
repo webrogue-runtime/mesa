@@ -12,7 +12,7 @@
 #include "util/build_id.h"
 #include "util/detect_os.h"
 #include "util/driconf.h"
-#include "util/mesa-sha1.h"
+#include "util/mesa-blake3.h"
 #include "util/u_debug.h"
 
 VKAPI_ATTR VkResult VKAPI_CALL
@@ -29,6 +29,7 @@ static const struct vk_instance_extension_table instance_extensions = {
 #ifdef NVK_USE_WSI_PLATFORM
    .KHR_get_surface_capabilities2 = true,
    .KHR_surface = true,
+   .KHR_surface_maintenance1 = true,
    .KHR_surface_protected_capabilities = true,
    .EXT_surface_maintenance1 = true,
    .EXT_swapchain_colorspace = true,
@@ -110,6 +111,7 @@ static const driOptionDescription nvk_dri_options[] = {
       DRI_CONF_VK_WSI_FORCE_SWAPCHAIN_TO_CURRENT_EXTENT(false)
       DRI_CONF_VK_X11_IGNORE_SUBOPTIMAL(false)
       DRI_CONF_VK_ZERO_VRAM(false)
+      DRI_CONF_NVK_APP_LAYER()
    DRI_CONF_SECTION_END
 };
 
@@ -126,6 +128,8 @@ nvk_init_dri_options(struct nvk_instance *instance)
 
    if (driQueryOptionb(&instance->dri_options, "vk_zero_vram"))
       instance->debug_flags |= NVK_DEBUG_ZERO_MEMORY;
+
+   instance->app_layer = driQueryOptionstr(&instance->dri_options, "nvk_app_layer");
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL
@@ -173,14 +177,14 @@ nvk_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
    }
 
    unsigned build_id_len = build_id_length(note);
-   if (build_id_len < SHA1_DIGEST_LENGTH) {
+   if (build_id_len < BUILD_ID_EXPECTED_HASH_LENGTH) {
       result = vk_errorf(NULL, VK_ERROR_INITIALIZATION_FAILED,
                         "build-id too short.  It needs to be a SHA");
       goto fail_init;
    }
 
-   STATIC_ASSERT(sizeof(instance->driver_build_sha) == SHA1_DIGEST_LENGTH);
-   memcpy(instance->driver_build_sha, build_id_data(note), SHA1_DIGEST_LENGTH);
+   STATIC_ASSERT(sizeof(instance->driver_build_sha) == BLAKE3_KEY_LEN);
+   copy_build_id_to_sha1(instance->driver_build_sha, note);
 
    *pInstance = nvk_instance_to_handle(instance);
    return VK_SUCCESS;

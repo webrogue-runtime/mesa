@@ -182,7 +182,8 @@ clc_lower_input_image_deref(nir_builder *b, struct clc_image_lower_context *cont
                }
 
                assert((in_var->data.access & ACCESS_NON_WRITEABLE) == 0);
-               nir_rewrite_image_intrinsic(intrinsic, nir_imm_int(b, image_binding), false);
+               nir_rewrite_image_intrinsic(intrinsic, nir_imm_int(b, image_binding),
+                                           nir_image_intrinsic_type_default);
                break;
             }
 
@@ -205,7 +206,8 @@ clc_lower_input_image_deref(nir_builder *b, struct clc_image_lower_context *cont
                }
 
                assert((in_var->data.access & ACCESS_NON_WRITEABLE) == 0);
-               nir_rewrite_image_intrinsic(intrinsic, nir_imm_int(b, image_binding), false);
+               nir_rewrite_image_intrinsic(intrinsic, nir_imm_int(b, image_binding),
+                                           nir_image_intrinsic_type_default);
                break;
             }
 
@@ -791,12 +793,20 @@ clc_spirv_to_dxil(struct clc_libclc *lib,
 
    glsl_type_singleton_init_or_ref();
 
+   struct nir_spirv_specialization *spec = NULL;
+   if (consts && consts->num_specializations > 0) {
+      spec = vtn_alloc_specialization(consts->num_specializations);
+
+      for (unsigned i = 0; i < consts->num_specializations; i++) {
+         vtn_add_specialization_entry(spec, i, consts->specializations[i].id,
+                                      sizeof(consts->specializations[i].value),
+                                      &consts->specializations[i].value, false);
+      }
+   }
    nir = spirv_to_nir(linked_spirv->data, linked_spirv->size / 4,
-                      consts ? (struct nir_spirv_specialization *)consts->specializations : NULL,
-                      consts ? consts->num_specializations : 0,
-                      MESA_SHADER_KERNEL, entrypoint,
-                      &spirv_options,
-                      &nir_options);
+                      spec, MESA_SHADER_KERNEL, entrypoint,
+                      &spirv_options, &nir_options);
+   vtn_free_specialization(spec);
    if (!nir) {
       clc_error(logger, "spirv_to_nir() failed");
       goto err_free_dxil;

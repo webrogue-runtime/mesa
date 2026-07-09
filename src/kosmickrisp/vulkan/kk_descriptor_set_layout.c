@@ -65,7 +65,7 @@ kk_descriptor_stride_align_for_type(
 
    case VK_DESCRIPTOR_TYPE_MUTABLE_EXT:
       *stride = *alignment = 0;
-      if (type_list == NULL)
+      if (type_list == NULL || type_list->descriptorTypeCount == 0u)
          *stride = *alignment = KK_MAX_DESCRIPTOR_SIZE;
       for (unsigned i = 0; type_list && i < type_list->descriptorTypeCount;
            i++) {
@@ -206,8 +206,8 @@ kk_CreateDescriptorSetLayout(VkDevice device,
       switch (binding->descriptorType) {
       case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:
          layout->binding[b].dynamic_buffer_index = dynamic_buffer_count;
-         BITSET_SET_RANGE(layout->dynamic_ubos, dynamic_buffer_count,
-                          dynamic_buffer_count + binding->descriptorCount - 1);
+         BITSET_SET_COUNT(layout->dynamic_ubos, dynamic_buffer_count,
+                          binding->descriptorCount);
          dynamic_buffer_count += binding->descriptorCount;
          break;
 
@@ -247,7 +247,6 @@ kk_CreateDescriptorSetLayout(VkDevice device,
       }
 
       stride *= max_plane_count;
-      layout->binding[b].count_per_element = max_plane_count;
 
       if (stride > 0) {
          assert(stride <= UINT8_MAX);
@@ -285,7 +284,7 @@ kk_CreateDescriptorSetLayout(VkDevice device,
 
    layout->non_variable_descriptor_buffer_size = buffer_size;
    layout->max_buffer_size = buffer_size + max_variable_descriptor_size;
-   layout->dynamic_buffer_count = dynamic_buffer_count;
+   layout->vk.dynamic_descriptor_count = dynamic_buffer_count;
 
    struct mesa_blake3 blake3_ctx;
    _mesa_blake3_init(&blake3_ctx);
@@ -293,7 +292,7 @@ kk_CreateDescriptorSetLayout(VkDevice device,
 #define BLAKE3_UPDATE_VALUE(x)                                                 \
    _mesa_blake3_update(&blake3_ctx, &(x), sizeof(x));
    BLAKE3_UPDATE_VALUE(layout->non_variable_descriptor_buffer_size);
-   BLAKE3_UPDATE_VALUE(layout->dynamic_buffer_count);
+   BLAKE3_UPDATE_VALUE(layout->vk.dynamic_descriptor_count);
    BLAKE3_UPDATE_VALUE(layout->binding_count);
 
    for (uint32_t b = 0; b < num_bindings; b++) {
@@ -388,6 +387,7 @@ kk_GetDescriptorSetLayoutSupport(
    uint32_t variable_stride = 0;
    uint32_t variable_count = 0;
    uint8_t dynamic_buffer_count = 0;
+   bool variable_is_inline_uniform_block = false;
 
    for (uint32_t i = 0; i < pCreateInfo->bindingCount; i++) {
       const VkDescriptorSetLayoutBinding *binding = &pCreateInfo->pBindings[i];
@@ -425,6 +425,11 @@ kk_GetDescriptorSetLayoutSupport(
              */
             variable_count = MAX2(1, binding->descriptorCount);
             variable_stride = stride;
+
+            variable_is_inline_uniform_block =
+               binding->descriptorType ==
+               VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK;
+
          } else {
             /* Since we're aligning to the maximum and since this is just a
              * check for whether or not the max buffer size is big enough, we
@@ -456,12 +461,21 @@ kk_GetDescriptorSetLayoutSupport(
       switch (ext->sType) {
       case VK_STRUCTURE_TYPE_DESCRIPTOR_SET_VARIABLE_DESCRIPTOR_COUNT_LAYOUT_SUPPORT: {
          VkDescriptorSetVariableDescriptorCountLayoutSupport *vs = (void *)ext;
+         uint32_t max_var_count;
+
          if (variable_stride > 0) {
-            vs->maxVariableDescriptorCount =
+            max_var_count =
                (max_buffer_size - non_variable_size) / variable_stride;
          } else {
-            vs->maxVariableDescriptorCount = 0;
+            max_var_count = 0;
          }
+
+         if (variable_is_inline_uniform_block) {
+            max_var_count =
+               MIN2(max_var_count, KK_MAX_INLINE_UNIFORM_BLOCK_SIZE);
+         }
+
+         vs->maxVariableDescriptorCount = max_var_count;
          break;
       }
 

@@ -74,20 +74,48 @@ __anv_perf_warn(struct anv_device *device,
 }
 
 void
+anv_cmd_buffer_descriptor_buffer_debug(struct anv_cmd_buffer *cmd_buffer,
+                                       VkPipelineStageFlags2 stages,
+                                       const char* reason)
+{
+   struct log_stream *stream = mesa_log_streami();
+
+   mesa_log_stream_printf(stream, "descriptors: cmd=%p stages=0x%08"PRIx64": %s\n",
+                          cmd_buffer, stages, reason);
+
+   mesa_log_stream_destroy(stream);
+}
+
+void
 anv_cmd_buffer_pending_pipe_debug(struct anv_cmd_buffer *cmd_buffer,
+                                  VkPipelineStageFlags2 src_stages,
+                                  VkPipelineStageFlags2 dst_stages,
                                   enum anv_pipe_bits bits,
                                   const char* reason)
 {
-   if (bits == 0)
+   if (bits == 0 && src_stages == 0 && dst_stages == 0)
       return;
 
    struct log_stream *stream = mesa_log_streami();
 
    mesa_log_stream_printf(stream, "acc: ");
 
-   mesa_log_stream_printf(stream, "bits: ");
+   mesa_log_stream_printf(stream, "src: ");
+   u_foreach_bit64(b, src_stages) {
+      mesa_log_stream_printf(stream, "%s,",
+                             vk_PipelineStageFlagBits2_to_str(BITFIELD_BIT(b)) +
+                             strlen("VK_PIPELINE_STAGE_2_"));
+   }
+   mesa_log_stream_printf(stream, " dst: ");
+   u_foreach_bit64(b, dst_stages) {
+      mesa_log_stream_printf(stream, "%s,",
+                             vk_PipelineStageFlagBits2_to_str(BITFIELD_BIT(b)) +
+                             strlen("VK_PIPELINE_STAGE_2_"));
+   }
+
+   mesa_log_stream_printf(stream, " bits: ");
    anv_dump_pipe_bits(bits, stream);
-   mesa_log_stream_printf(stream, "reason: %s", reason);
+   mesa_log_stream_printf(stream, " reason: %s", reason);
 
    mesa_log_stream_printf(stream, "\n");
 
@@ -132,6 +160,8 @@ anv_dump_pipe_bits(enum anv_pipe_bits bits, struct log_stream *stream)
       mesa_log_stream_printf(stream, "+utdp_flush ");
    if (bits & ANV_PIPE_CCS_CACHE_FLUSH_BIT)
       mesa_log_stream_printf(stream, "+ccs_flush ");
+   if (bits & ANV_PIPE_RT_BTI_CHANGE)
+      mesa_log_stream_printf(stream, "+rt-bti-change ");
 }
 
 const char *
@@ -189,7 +219,7 @@ anv_gfx_state_bit_to_str(enum anv_gfx_state_bits state)
       NAME(WA_18019816803);
       NAME(WA_14018283232);
       NAME(TBIMR_TILE_PASS_INFO);
-      NAME(FS_MSAA_FLAGS);
+      NAME(FS_CONFIG);
       NAME(TESS_CONFIG);
       NAME(MESH_PROVOKING_VERTEX);
    default: UNREACHABLE("invalid state");
@@ -295,15 +325,25 @@ create_bvh_dump_file(struct anv_bvh_dump *bvh)
    fclose(file);
 }
 
-void anv_dump_bvh_to_files(struct anv_device *device)
+void anv_get_pending_bvh_dumps(struct list_head *list,
+                               uint32_t cmd_buffer_count,
+                               struct anv_cmd_buffer **cmd_buffers)
 {
-   /* device->mutex is acquired in anv_queue_submit, so no need to lock here. */
-   list_for_each_entry_safe(struct anv_bvh_dump, bvh_dump, &device->bvh_dumps,
-                            link) {
+   list_inithead(list);
+   if (INTEL_DEBUG_BVH_ANY) {
+      for (uint32_t i = 0; i < cmd_buffer_count; ++i) {
+         list_splicetail(&cmd_buffers[i]->bvh_dumps, list);
+         list_inithead(&cmd_buffers[i]->bvh_dumps);
+      }
+   }
+}
+
+void anv_dump_bvh_to_files(struct anv_device* device, struct list_head *list)
+{
+   list_for_each_entry_safe(struct anv_bvh_dump, bvh_dump, list, link) {
       create_bvh_dump_file(bvh_dump);
 
       anv_device_release_bo(device, bvh_dump->bo);
-      list_del(&bvh_dump->link);
       free(bvh_dump);
    }
 }

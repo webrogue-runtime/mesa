@@ -43,6 +43,7 @@ extern "C" {
 
 #define FP16_ONE     ((uint16_t) 0x3c00)
 #define FP16_ZERO    ((uint16_t) 0)
+#define FP16_MAX_F   65504.0
 
 uint16_t _mesa_float_to_half_slow(float val);
 float _mesa_half_to_float_slow(uint16_t val);
@@ -113,6 +114,9 @@ _mesa_float_to_float16_rtz(float val)
    return _mesa_float_to_float16_rtz_slow(val);
 }
 
+uint16_t _mesa_float_to_float16_ru(float val);
+uint16_t _mesa_float_to_float16_rd(float val);
+
 static inline uint16_t
 _mesa_float_to_float16_rtne(float val)
 {
@@ -123,6 +127,21 @@ static inline bool
 _mesa_half_is_negative(uint16_t h)
 {
    return !!(h & 0x8000);
+}
+
+static inline bool
+_mesa_float_is_half(double val)
+{
+   /* val parameter is double to prevent implicit double->float cast.  We have
+    * to cast to float because that's what _mesa_float_to_half expects and we
+    * don't have any readily available _double_to_half function.  This may
+    * introduce double-rounding errors, however this is ok because the final
+    * check is done at double precision, any rounding will fail to produce the
+    * original value.
+    */
+   uint16_t fp16_val = _mesa_float_to_half((float) val);
+   bool is_denorm = (fp16_val & 0x7fff) != 0 && (fp16_val & 0x7fff) <= 0x3ff;
+   return val == (double) _mesa_half_to_float(fp16_val) && !is_denorm;
 }
 
 

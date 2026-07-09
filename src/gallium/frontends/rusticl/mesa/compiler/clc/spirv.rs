@@ -258,18 +258,16 @@ impl SPIRVBin {
                     .iter()
                     .map(|a| SPIRVKernelArg {
                         // SAFETY: we have a valid C string pointer here
-                        name: a
-                            .name
-                            .is_null()
-                            .not()
-                            .then(|| unsafe { CStr::from_ptr(a.name) }.to_owned())
-                            .unwrap_or_default(),
-                        type_name: a
-                            .type_name
-                            .is_null()
-                            .not()
-                            .then(|| unsafe { CStr::from_ptr(a.type_name) }.to_owned())
-                            .unwrap_or_default(),
+                        name: if !a.name.is_null() {
+                            unsafe { CStr::from_ptr(a.name) }.to_owned()
+                        } else {
+                            Default::default()
+                        },
+                        type_name: if !a.type_name.is_null() {
+                            unsafe { CStr::from_ptr(a.type_name) }.to_owned()
+                        } else {
+                            Default::default()
+                        },
                         access_qualifier: clc_kernel_arg_access_qualifier(a.access_qualifier),
                         address_qualifier: a.address_qualifier,
                         type_qualifier: clc_kernel_arg_type_qualifier(a.type_qualifier),
@@ -303,8 +301,7 @@ impl SPIRVBin {
             private_data: ptr::from_mut(log).cast(),
         });
 
-        let float_controls = float_controls::FLOAT_CONTROLS_DENORM_FLUSH_TO_ZERO_FP32 as u32
-            | float_controls::FLOAT_CONTROLS_SIGNED_ZERO_PRESERVE as u32;
+        let float_controls = float_controls::FLOAT_CONTROLS_DENORM_FLUSH_TO_ZERO_FP32 as u32;
         spirv_to_nir_options {
             create_library: library,
             environment: nir_spirv_execution_environment::NIR_SPIRV_OPENCL,
@@ -328,7 +325,7 @@ impl SPIRVBin {
         nir_options: *const nir_shader_compiler_options,
         spirv_caps: &spirv_capabilities,
         libclc: &NirShader,
-        spec_constants: &mut [nir_spirv_specialization],
+        spec_constants: &mut nir_spirv_specialization,
         address_bits: u32,
         log: Option<&mut Vec<String>>,
     ) -> Option<NirShader> {
@@ -340,8 +337,7 @@ impl SPIRVBin {
             spirv_to_nir(
                 self.spirv.data.cast(),
                 self.spirv.size / 4,
-                spec_constants.as_mut_ptr(),
-                spec_constants.len() as u32,
+                spec_constants,
                 mesa_shader_stage::MESA_SHADER_KERNEL,
                 c_entry.as_ptr(),
                 &spirv_options,

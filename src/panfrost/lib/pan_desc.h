@@ -1,28 +1,6 @@
 /*
  * Copyright (C) 2021 Collabora, Ltd.
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- *
- * Authors:
- *   Alyssa Rosenzweig <alyssa.rosenzweig@collabora.com>
- *   Boris Brezillon <boris.brezillon@collabora.com>
+ * SPDX-License-Identifier: MIT
  */
 
 #ifndef __PAN_DESC_H
@@ -170,10 +148,38 @@ struct pan_fb_info {
    /* Only used on Valhall */
    bool sprite_coord_origin;
    bool first_provoking_vertex;
+   bool allow_hsr_prepass;
 
    /* indicates whether pixel local storage is enabled */
    bool pls_enabled;
 };
+
+struct pan_clean_tile {
+   /* clean_tile_write_enable mask on the 8 color attachments. */
+   uint8_t write_rt_mask;
+
+   /* clean_tile_write_enable flag on the depth/stencil attachment. */
+   uint8_t write_zs : 1;
+};
+
+static inline bool
+pan_clean_tile_write_rt_enabled(struct pan_clean_tile clean_tile,
+                                unsigned index)
+{
+   return (clean_tile.write_rt_mask >> index) & 1;
+}
+
+static inline bool
+pan_clean_tile_write_zs_enabled(struct pan_clean_tile clean_tile)
+{
+   return clean_tile.write_zs;
+}
+
+static inline bool
+pan_clean_tile_write_any_set(struct pan_clean_tile clean_tile)
+{
+   return clean_tile.write_rt_mask || clean_tile.write_zs;
+}
 
 static inline unsigned
 pan_wls_instances(const struct pan_compute_dim *dim)
@@ -268,53 +274,68 @@ pan_sample_pattern(unsigned samples)
    }
 }
 
+static inline struct pan_image_block_size
+pan_effective_tile_block_size(unsigned tile_size)
+{
+   /* Tile is either a square or a rect whose width is twice the height. */
+   unsigned shift_h = util_logbase2(tile_size);
+   unsigned shift_w = shift_h + 1;
+   unsigned h = 1 << (shift_h >> 1);
+   unsigned w = 1 << (shift_w >> 1);
+
+   return (struct pan_image_block_size){w, h};
+}
+
 void GENX(pan_select_tile_size)(struct pan_fb_info *fb);
+
+bool GENX(pan_force_clean_write_on)(const struct pan_image *image,
+                                    unsigned fb_tile_size_px);
 
 void GENX(pan_emit_tls)(const struct pan_tls_info *info,
                         struct mali_local_storage_packed *out);
 
 int GENX(pan_select_crc_rt)(const struct pan_fb_info *fb, unsigned tile_size);
 
+struct pan_attachment_info {
+   const struct pan_image_view *iview;
+   unsigned layer_or_z_slice;
+   unsigned fb_tile_size_px;
+};
+
 #if PAN_ARCH >= 5
-void GENX(pan_emit_linear_color_attachment)(const struct pan_fb_info *fb,
-                                            unsigned rt_idx,
-                                            unsigned layer_or_z_slice,
-                                            unsigned cbuf_offset,
-                                            void *payload);
-void GENX(pan_emit_linear_s_attachment)(const struct pan_fb_info *fb,
-                                        unsigned layer_or_z_slice,
-                                        void *payload);
-void GENX(pan_emit_linear_zs_attachment)(const struct pan_fb_info *fb,
-                                         unsigned layer_or_z_slice,
-                                         void *payload);
-void GENX(pan_emit_u_tiled_color_attachment)(const struct pan_fb_info *fb,
-                                             unsigned rt_idx,
-                                             unsigned layer_or_z_slice,
-                                             unsigned cbuf_offset,
+void GENX(pan_emit_default_color_attachment)(enum pipe_format format,
                                              void *payload);
-void GENX(pan_emit_u_tiled_s_attachment)(const struct pan_fb_info *fb,
-                                         unsigned layer_or_z_slice,
+void GENX(pan_emit_linear_color_attachment)(const struct pan_attachment_info *att,
+                                            void *payload);
+void GENX(pan_emit_linear_s_attachment)(const struct pan_attachment_info *att,
+                                        void *payload);
+void GENX(pan_emit_linear_zs_attachment)(const struct pan_attachment_info *att,
                                          void *payload);
-void GENX(pan_emit_u_tiled_zs_attachment)(const struct pan_fb_info *fb,
-                                          unsigned layer_or_z_slice,
+void GENX(pan_emit_u_tiled_color_attachment)(const struct pan_attachment_info *att,
+                                             void *payload);
+void GENX(pan_emit_u_tiled_s_attachment)(const struct pan_attachment_info *att,
+                                         void *payload);
+void GENX(pan_emit_u_tiled_zs_attachment)(const struct pan_attachment_info *att,
                                           void *payload);
-void GENX(pan_emit_afbc_color_attachment)(const struct pan_fb_info *fb,
-                                          unsigned rt_idx,
-                                          unsigned layer_or_z_slice,
-                                          unsigned cbuf_offset, void *payload);
-void GENX(pan_emit_afbc_zs_attachment)(const struct pan_fb_info *fb,
-                                       unsigned layer_or_z_slice,
+void GENX(pan_emit_afbc_color_attachment)(const struct pan_attachment_info *att,
+                                          void *payload);
+void GENX(pan_emit_afbc_zs_attachment)(const struct pan_attachment_info *att,
                                        void *payload);
-void GENX(pan_emit_afbc_s_attachment)(const struct pan_fb_info *fb,
-                                      unsigned layer_or_z_slice,
+void GENX(pan_emit_afbc_s_attachment)(const struct pan_attachment_info *att,
                                       void *payload);
 #endif
 
 #if PAN_ARCH >= 10
-void GENX(pan_emit_afrc_color_attachment)(const struct pan_fb_info *fb,
-                                          unsigned rt_idx,
-                                          unsigned layer_or_z_slice,
-                                          unsigned cbuf_offset, void *payload);
+void
+GENX(pan_emit_interleaved_64k_color_attachment)(const struct pan_attachment_info *att,
+                                                void *payload);
+void GENX(pan_emit_interleaved_64k_zs_attachment)(const struct pan_attachment_info *att,
+                                                  void *payload);
+void GENX(pan_emit_interleaved_64k_s_attachment)(const struct pan_attachment_info *att,
+                                                 void *payload);
+
+void GENX(pan_emit_afrc_color_attachment)(const struct pan_attachment_info *att,
+                                          void *payload);
 #endif
 
 unsigned GENX(pan_emit_fbd)(const struct pan_fb_info *fb, unsigned layer_idx,

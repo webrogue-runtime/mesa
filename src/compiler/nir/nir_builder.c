@@ -49,7 +49,7 @@ nir_builder MUST_CHECK PRINTFLIKE(3, 4)
 
    nir_function *func = nir_function_create(b.shader, "main");
    func->is_entrypoint = true;
-   b.exact = false;
+   b.fp_math_ctrl = nir_fp_fast_math;
    b.impl = nir_function_impl_create(func);
    b.cursor = nir_after_cf_list(&b.impl->body);
 
@@ -71,8 +71,7 @@ nir_builder_alu_instr_finish_and_insert(nir_builder *build, nir_alu_instr *instr
 {
    const nir_op_info *op_info = &nir_op_infos[instr->op];
 
-   instr->exact = build->exact;
-   instr->fp_fast_math = build->fp_fast_math;
+   instr->fp_math_ctrl = nir_op_valid_fp_math_ctrl(instr->op, build->fp_math_ctrl);
 
    /* Guess the number of components the destination temporary should have
     * based on our input sizes, if it's not fixed for the op.
@@ -244,19 +243,19 @@ nir_dim_has_lod(enum glsl_sampler_dim dim)
 nir_def *
 nir_build_tex_struct(nir_builder *build, nir_texop op, struct nir_tex_builder f)
 {
-   assert(((f.texture_index || f.texture_offset != NULL) +
+   assert(((f.texture_index || f.texture_offset != NULL || f.texture_heap_offset != NULL) +
            (f.texture_handle != NULL) + (f.texture_deref != NULL)) <= 1 &&
           "one type of texture");
 
-   assert(((f.sampler_index || f.sampler_offset != NULL) +
+   assert(((f.sampler_index || f.sampler_offset != NULL || f.sampler_heap_offset != NULL) +
            (f.sampler_handle != NULL) + (f.sampler_deref != NULL)) <= 1 &&
           "one type of sampler");
 
    bool has_texture_src =
-      f.texture_offset || f.texture_handle || f.texture_deref;
+      f.texture_offset || f.texture_heap_offset || f.texture_handle || f.texture_deref;
 
    bool has_sampler_src =
-      f.sampler_offset || f.sampler_handle || f.sampler_deref;
+      f.sampler_offset || f.sampler_heap_offset || f.sampler_handle || f.sampler_deref;
 
    nir_def *lod = f.lod;
    enum glsl_sampler_dim dim = f.dim;
@@ -275,6 +274,15 @@ nir_build_tex_struct(nir_builder *build, nir_texop op, struct nir_tex_builder f)
          glsl_get_sampler_result_type(type));
    }
 
+   /* Fix up the opcode to allow simplified usage. This helps ergonomics. */
+   if (op == nir_texop_txf && f.ms_index) {
+      op = nir_texop_txf_ms;
+   } else if (op == nir_texop_tex && f.lod) {
+      op = nir_texop_txl;
+   } else if (op == nir_texop_tex && f.bias) {
+      op = nir_texop_txb;
+   }
+
    if (lod == NULL && nir_dim_has_lod(dim) &&
        (op == nir_texop_txs || op == nir_texop_txf)) {
 
@@ -289,6 +297,7 @@ nir_build_tex_struct(nir_builder *build, nir_texop op, struct nir_tex_builder f)
    tex->sampler_dim = dim;
    tex->is_array = is_array;
    tex->is_shadow = false;
+   tex->is_sparse = f.is_sparse;
    tex->backend_flags = f.backend_flags;
    tex->texture_index = f.texture_index;
    tex->sampler_index = f.sampler_index;
@@ -301,6 +310,9 @@ nir_build_tex_struct(nir_builder *build, nir_texop op, struct nir_tex_builder f)
    case nir_texop_txf_ms_mcs_intel:
    case nir_texop_fragment_mask_fetch_amd:
    case nir_texop_descriptor_amd:
+   case nir_texop_resinfo_intel:
+   case nir_texop_sparse_residency_intel:
+   case nir_texop_sparse_residency_txf_intel:
       tex->dest_type = nir_type_int32;
       break;
    case nir_texop_lod:
@@ -326,6 +338,9 @@ nir_build_tex_struct(nir_builder *build, nir_texop op, struct nir_tex_builder f)
    } else if (f.texture_offset) {
       tex->src[i++] =
          nir_tex_src_for_ssa(nir_tex_src_texture_offset, f.texture_offset);
+   } else if (f.texture_heap_offset) {
+      tex->src[i++] =
+         nir_tex_src_for_ssa(nir_tex_src_texture_heap_offset, f.texture_heap_offset);
    }
 
    if (f.sampler_deref) {
@@ -338,6 +353,9 @@ nir_build_tex_struct(nir_builder *build, nir_texop op, struct nir_tex_builder f)
    } else if (f.sampler_offset) {
       tex->src[i++] =
          nir_tex_src_for_ssa(nir_tex_src_sampler_offset, f.sampler_offset);
+   } else if (f.sampler_heap_offset) {
+      tex->src[i++] =
+         nir_tex_src_for_ssa(nir_tex_src_sampler_heap_offset, f.sampler_heap_offset);
    }
 
    if (f.coord) {
@@ -387,8 +405,7 @@ nir_vec_scalars(nir_builder *build, nir_scalar *comp, unsigned num_components)
       instr->src[i].src = nir_src_for_ssa(comp[i].def);
       instr->src[i].swizzle[0] = comp[i].comp;
    }
-   instr->exact = build->exact;
-   instr->fp_fast_math = build->fp_fast_math;
+   assert(nir_op_infos[op].valid_fp_math_ctrl == 0);
 
    /* Note: not reusing nir_builder_alu_instr_finish_and_insert() because it
     * can't re-guess the num_components when num_components == 1 (nir_op_mov).
@@ -401,13 +418,43 @@ nir_vec_scalars(nir_builder *build, nir_scalar *comp, unsigned num_components)
    return &instr->def;
 }
 
+nir_def *
+nir_def_rewrite_uses_with_alu_src(nir_builder *build, nir_def *def,
+                                  nir_alu_src src, unsigned num_components)
+{
+   if (nir_alu_src_is_trivial_ssa(&src, num_components)) {
+      nir_def_rewrite_uses(def, src.src.ssa);
+      return NULL;
+   }
+
+   nir_def *mov = NULL;
+
+   nir_foreach_use_including_if_safe(use, def) {
+      if (nir_src_is_if(use) || nir_src_parent_instr(use)->type != nir_instr_type_alu) {
+         if (!mov)
+            mov = nir_mov_alu(build, src, num_components);
+
+         nir_src_rewrite(use, mov);
+      } else {
+         nir_alu_src *alu_src = container_of(use, nir_alu_src, src);
+
+         for (unsigned i = 0; i < NIR_MAX_VEC_COMPONENTS; i++)
+            alu_src->swizzle[i] = src.swizzle[alu_src->swizzle[i]];
+
+         nir_src_rewrite(use, src.src.ssa);
+      }
+   }
+
+   return mov;
+}
+
 /**
  * Get nir_def for an alu src, respecting the nir_alu_src's swizzle.
  */
 nir_def *
 nir_ssa_for_alu_src(nir_builder *build, nir_alu_instr *instr, unsigned srcn)
 {
-   if (nir_alu_src_is_trivial_ssa(instr, srcn))
+   if (nir_alu_has_trivial_src(instr, srcn))
       return instr->src[srcn].src.ssa;
 
    nir_alu_src *src = &instr->src[srcn];
@@ -561,8 +608,7 @@ nir_push_continue(nir_builder *build, nir_loop *loop)
       loop = nir_cf_node_as_loop(block->cf_node.parent);
    }
 
-   nir_loop_add_continue_construct(loop);
-
+   assert(nir_loop_has_continue_construct(loop));
    build->cursor = nir_before_cf_list(&loop->continue_list);
    return loop;
 }
@@ -743,4 +789,41 @@ nir_call_serialized(nir_builder *b, const uint32_t *serialized,
    nir_progress(true, b->impl, nir_metadata_none);
    ralloc_free(memctx);
    return ret;
+}
+
+/* Build frag_coord according to NIR options. This should generate the final
+ * lowered form expected by drivers.
+ *
+ * The purpose of "num_components" is to generate less dead code for the split
+ * form if some components are not needed.
+ */
+nir_def *
+nir_build_frag_coord(nir_builder *b, unsigned num_components)
+{
+   assert(b->shader->info.stage == MESA_SHADER_FRAGMENT);
+   assert(num_components && num_components <= 4);
+
+   if (b->shader->options->frag_coord_form >= nir_frag_coord_xy_z_w_separate) {
+      nir_def *xy = nir_load_frag_coord_xy(b);
+
+      if (num_components <= 2)
+         return nir_trim_vector(b, xy, num_components);
+
+      nir_def *z = nir_load_frag_coord_z(b);
+
+      if (num_components == 3)
+         return nir_vec3(b, nir_channel(b, xy, 0), nir_channel(b, xy, 1), z);
+
+      nir_def *w;
+
+      if (b->shader->options->frag_coord_form ==
+          nir_frag_coord_xy_z_w_rcp_separate)
+         w = nir_frcp(b, nir_load_frag_coord_w_rcp(b));
+      else
+         w = nir_load_frag_coord_w(b);
+
+      return nir_vec4(b, nir_channel(b, xy, 0), nir_channel(b, xy, 1), z, w);
+   } else {
+      return nir_trim_vector(b, nir_load_frag_coord(b), num_components);
+   }
 }

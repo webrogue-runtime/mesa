@@ -333,6 +333,37 @@ uid(uint64_t ui)
    return di.d;
 }
 
+
+/* Unlike C's fmax, this follows IEEE 754-2019
+ * maximumNumber rules (except sNaN vs qNaN behavior).
+ * This means, +0.0 is strictly greater than -0.0
+ * and NaN less than any number.
+ */
+static inline double
+util_max_num(double a, double b)
+{
+   /* Handle signed zero. (And sign bit.) */
+   if (a == b)
+      return uid(dui(a) & dui(b));
+
+   return fmax(a, b);
+}
+
+/* Unlike C's fmin, this follows IEEE 754-2019
+ * minimumNumber rules (except sNaN vs qNaN behavior).
+ * This means, -0.0 is strictly less than +0.0
+ * and NaN greater than any number.
+ */
+static inline double
+util_min_num(double a, double b)
+{
+   /* Handle signed zero. (Or sign bit.) */
+   if (a == b)
+      return uid(dui(a) | dui(b));
+
+   return fmin(a, b);
+}
+
 /**
  * Convert uint8_t to float in [0, 1].
  */
@@ -674,6 +705,12 @@ ROUND_DOWN_TO(uint64_t value, uint32_t alignment)
    return ((value) & ~(uint64_t)(alignment - 1));
 }
 
+static inline uint64_t
+ROUND_DOWN_TO_NPOT(uint64_t value, uint32_t alignment)
+{
+   return value - (value % alignment);
+}
+
 /**
  * Align a value, only works pot alignemnts.
  */
@@ -840,6 +877,36 @@ static inline bool
 util_is_sint16(int x)
 {
    return x >= INT16_MIN && x <= INT16_MAX;
+}
+
+static inline bool
+util_is_uint16(int x)
+{
+   return x >= 0 && x <= UINT16_MAX;
+}
+
+/* Heuristic to determine whether a uint32_t is probably actually a float
+ * (http://stackoverflow.com/a/2953466)
+ */
+static inline bool
+util_is_probably_float(uint32_t bits)
+{
+   int exp = ((bits & 0x7f800000U) >> 23) - 127;
+   uint32_t mant = bits & 0x007fffff;
+
+   /* +- 0.0 */
+   if (exp == -127 && mant == 0)
+      return true;
+
+   /* +- 1 billionth to 1 billion */
+   if (-30 <= exp && exp <= 30)
+      return true;
+
+   /* some value with only a few binary digits */
+   if ((mant & 0x0000ffff) == 0)
+      return true;
+
+   return false;
 }
 
 #ifdef __cplusplus

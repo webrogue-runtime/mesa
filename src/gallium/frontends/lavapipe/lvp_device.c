@@ -74,6 +74,13 @@
 #define LVP_SAMPLE_COUNTS (VK_SAMPLE_COUNT_1_BIT | VK_SAMPLE_COUNT_4_BIT | \
                            VK_SAMPLE_COUNT_8_BIT)
 
+extern unsigned lp_native_vector_width;
+
+static bool has_cooperative_matrix(void) {
+   /* only support coopmat if we have 8 wide */
+   return (lp_native_vector_width / 32) >= 8;
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL lvp_EnumerateInstanceVersion(uint32_t* pApiVersion)
 {
    *pApiVersion = LVP_API_VERSION;
@@ -91,6 +98,7 @@ static const struct vk_instance_extension_table lvp_instance_extensions_supporte
 #ifdef LVP_USE_WSI_PLATFORM
    .KHR_get_surface_capabilities2            = true,
    .KHR_surface                              = true,
+   .KHR_surface_maintenance1                 = true,
    .KHR_surface_protected_capabilities       = true,
    .EXT_swapchain_colorspace                 = true,
    .EXT_surface_maintenance1                 = true,
@@ -123,12 +131,14 @@ static const struct vk_device_extension_table lvp_device_extensions_supported = 
    .KHR_buffer_device_address             = true,
    .KHR_create_renderpass2                = true,
    .KHR_compute_shader_derivatives        = true,
+   .KHR_cooperative_matrix                = true,
    .KHR_copy_commands2                    = true,
    .KHR_copy_memory_indirect              = true,
    .KHR_dedicated_allocation              = true,
    .KHR_deferred_host_operations          = true,
    .KHR_depth_stencil_resolve             = true,
    .KHR_descriptor_update_template        = true,
+   .KHR_device_address_commands           = true,
    .KHR_device_group                      = true,
    .KHR_draw_indirect_count               = true,
    .KHR_driver_properties                 = true,
@@ -136,11 +146,17 @@ static const struct vk_device_extension_table lvp_device_extensions_supported = 
    .KHR_dynamic_rendering_local_read      = true,
    .KHR_format_feature_flags2             = true,
    .KHR_external_fence                    = true,
+#ifdef HAVE_LIBDRM
+   .KHR_external_fence_fd                 = true,
+#endif
    .KHR_external_memory                   = true,
 #ifdef PIPE_MEMORY_FD
    .KHR_external_memory_fd                = true,
 #endif
    .KHR_external_semaphore                = true,
+#ifdef HAVE_LIBDRM
+   .KHR_external_semaphore_fd             = true,
+#endif
    .KHR_shader_float_controls             = true,
    .KHR_shader_float_controls2            = true,
    .KHR_get_memory_requirements2          = true,
@@ -172,6 +188,7 @@ static const struct vk_device_extension_table lvp_device_extensions_supported = 
    .KHR_ray_tracing_pipeline              = true,
    .KHR_ray_tracing_position_fetch        = true,
    .KHR_relaxed_block_layout              = true,
+   .KHR_robustness2                       = true,
    .KHR_sampler_mirror_clamp_to_edge      = true,
    .KHR_sampler_ycbcr_conversion          = true,
    .KHR_separate_depth_stencil_layouts    = true,
@@ -192,6 +209,7 @@ static const struct vk_device_extension_table lvp_device_extensions_supported = 
    .KHR_storage_buffer_storage_class      = true,
 #ifdef LVP_USE_WSI_PLATFORM
    .KHR_swapchain                         = true,
+   .KHR_swapchain_maintenance1            = true,
    .KHR_swapchain_mutable_format          = true,
 #endif
    .KHR_synchronization2                  = true,
@@ -207,6 +225,7 @@ static const struct vk_device_extension_table lvp_device_extensions_supported = 
    .EXT_4444_formats                      = true,
    .EXT_attachment_feedback_loop_layout   = true,
    .EXT_attachment_feedback_loop_dynamic_state = true,
+   .EXT_blend_operation_advanced          = true,
    .EXT_border_color_swizzle              = true,
    .EXT_calibrated_timestamps             = true,
    .EXT_color_write_enable                = true,
@@ -256,6 +275,7 @@ static const struct vk_device_extension_table lvp_device_extensions_supported = 
    .EXT_post_depth_coverage               = true,
    .EXT_private_data                      = true,
    .EXT_primitives_generated_query        = true,
+   .EXT_primitive_restart_index           = true,
    .EXT_primitive_topology_list_restart   = true,
    .EXT_rasterization_order_attachment_access = true,
    .EXT_queue_family_foreign              = true,
@@ -297,6 +317,8 @@ static const struct vk_device_extension_table lvp_device_extensions_supported = 
 #endif
    .GOOGLE_decorate_string                = true,
    .GOOGLE_hlsl_functionality1            = true,
+   .GOOGLE_user_type                      = true,
+   .NV_cooperative_matrix2                = true,
 };
 
 static bool
@@ -328,7 +350,7 @@ lvp_device_memory_type_for_handle_types(const struct lvp_physical_device *pdevic
       assert(!(types & ~(VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT |
                          VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT)));
 
-#ifdef HAVE_LIBDRM
+#if defined(HAVE_LIBDRM) && defined(HAVE_LINUX_UDMABUF_H)
       int dmabuf_bits = DRM_PRIME_CAP_EXPORT | DRM_PRIME_CAP_IMPORT;
       if ((pdevice->pscreen->caps.dmabuf & dmabuf_bits) == dmabuf_bits) {
          /* If we have full dma-buf support, everything is a dma-buf */
@@ -442,7 +464,7 @@ lvp_get_features(const struct lvp_physical_device *pdevice,
       .shaderFloat64                            = (pdevice->pscreen->caps.doubles == 1),
       .shaderInt64                              = (pdevice->pscreen->caps.int64 == 1),
       .shaderInt16                              = AND_SHADER_CAP(pdevice->pscreen, int16),
-      .variableMultisampleRate                  = false,
+      .variableMultisampleRate                  = true,
       .inheritedQueries                         = false,
       .shaderResourceMinLod                     = true,
       .sparseBinding                            = DETECT_OS_LINUX,
@@ -616,6 +638,9 @@ lvp_get_features(const struct lvp_physical_device *pdevice,
       /* VK_EXT_attachment_feedback_loop_layout_dynamic_state */
       .attachmentFeedbackLoopDynamicState = true,
 
+      /* VK_EXT_blend_operation_advanced */
+      .advancedBlendCoherentOperations = true,
+
       /* VK_KHR_ray_query */
       .rayQuery = true,
 
@@ -667,6 +692,9 @@ lvp_get_features(const struct lvp_physical_device *pdevice,
       /* VK_EXT_custom_border_color */
       .customBorderColors = true,
       .customBorderColorWithoutFormat = true,
+
+      /* VK_EXT_primitive_restart_index */
+      .primitiveRestartIndex = true,
 
       /* VK_EXT_color_write_enable */
       .colorWriteEnable = true,
@@ -729,7 +757,7 @@ lvp_get_features(const struct lvp_physical_device *pdevice,
       /* VK_EXT_dynamic_rendering_unused_attachments */
       .dynamicRenderingUnusedAttachments = true,
 
-      /* VK_EXT_robustness2 */
+      /* VK_KHR_robustness2 */
       .robustBufferAccess2 = true,
       .robustImageAccess2 = true,
       .nullDescriptor = true,
@@ -826,7 +854,7 @@ lvp_get_features(const struct lvp_physical_device *pdevice,
 #endif
 
 #ifdef LVP_USE_WSI_PLATFORM
-      /* VK_EXT_swapchain_maintenance1 */
+      /* VK_KHR_swapchain_maintenance1 */
       .swapchainMaintenance1 = true,
 #endif
 
@@ -854,10 +882,20 @@ lvp_get_features(const struct lvp_physical_device *pdevice,
       /* VK_KHR_unified_image_layouts */
       .unifiedImageLayouts = true,
       .unifiedImageLayoutsVideo = true,
+
+      /* VK_KHR_device_address_commands */
+      .deviceAddressCommands = true,
+
+      /* VK_KHR_cooperative_matrix */
+      .cooperativeMatrix = has_cooperative_matrix(),
+      .cooperativeMatrixRobustBufferAccess = has_cooperative_matrix(),
+
+      .cooperativeMatrixFlexibleDimensions = true,
+      .cooperativeMatrixConversions = true,
+      .cooperativeMatrixReductions = true,
+      .cooperativeMatrixPerElementOperations = true,
    };
 }
-
-extern unsigned lp_native_vector_width;
 
 static VkImageLayout lvp_host_copy_image_layouts[] = {
    VK_IMAGE_LAYOUT_GENERAL,
@@ -1136,6 +1174,14 @@ lvp_get_properties(const struct lvp_physical_device *device, struct vk_propertie
       .copyDstLayoutCount = ARRAY_SIZE(lvp_host_copy_image_layouts),
       .identicalMemoryTypeRequirements = VK_FALSE,
 
+      /* VK_EXT_blend_operation_advanced */
+      .advancedBlendMaxColorAttachments = device->pscreen->caps.max_render_targets,
+      .advancedBlendIndependentBlend = true,
+      .advancedBlendNonPremultipliedSrcColor = true,
+      .advancedBlendNonPremultipliedDstColor = true,
+      .advancedBlendCorrelatedOverlap = true,
+      .advancedBlendAllOperations = true,
+
       /* VK_EXT_transform_feedback */
       .maxTransformFeedbackStreams = device->pscreen->caps.max_vertex_streams,
       .maxTransformFeedbackBuffers = device->pscreen->caps.max_stream_output_buffers,
@@ -1145,7 +1191,7 @@ lvp_get_properties(const struct lvp_physical_device *device, struct vk_propertie
       .maxTransformFeedbackBufferDataStride = 2048,
       .transformFeedbackQueries = true,
       .transformFeedbackStreamsLinesTriangles = false,
-      .transformFeedbackRasterizationStreamSelect = false,
+      .transformFeedbackRasterizationStreamSelect = true,
       .transformFeedbackDraw = true,
 
       /* VK_EXT_extended_dynamic_state3 */
@@ -1192,7 +1238,7 @@ lvp_get_properties(const struct lvp_physical_device *device, struct vk_propertie
       .imageViewCaptureReplayDescriptorDataSize = 0,
       .samplerCaptureReplayDescriptorDataSize = 0,
       .accelerationStructureCaptureReplayDescriptorDataSize = 0,
-      .samplerDescriptorSize = sizeof(struct lp_descriptor),
+      .EDBsamplerDescriptorSize = sizeof(struct lp_descriptor),
       .combinedImageSamplerDescriptorSize = sizeof(struct lp_descriptor),
       .sampledImageDescriptorSize = sizeof(struct lp_descriptor),
       .storageImageDescriptorSize = sizeof(struct lp_descriptor),
@@ -1216,7 +1262,7 @@ lvp_get_properties(const struct lvp_physical_device *device, struct vk_propertie
       .graphicsPipelineLibraryFastLinking = VK_TRUE,
       .graphicsPipelineLibraryIndependentInterpolationDecoration = VK_TRUE,
 
-      /* VK_EXT_robustness2 */
+      /* VK_KHR_robustness2 */
       .robustStorageBufferAccessSizeAlignment = 1,
       .robustUniformBufferAccessSizeAlignment = 1,
 
@@ -1246,7 +1292,8 @@ lvp_get_properties(const struct lvp_physical_device *device, struct vk_propertie
       .maxMeshOutputComponents = 128, /* 32x vec4 min required */
       .maxMeshOutputVertices = 256,
       .maxMeshOutputPrimitives = 256,
-      .maxMeshOutputLayers = 8,
+      .maxMeshOutputLayers = 9,
+      .maxMeshMultiviewViewCount = 1, /* 1 means unsupported */
       .meshOutputPerVertexGranularity = 1,
       .meshOutputPerPrimitiveGranularity = 1,
       .maxPreferredTaskWorkGroupInvocations = 64,
@@ -1301,6 +1348,9 @@ lvp_get_properties(const struct lvp_physical_device *device, struct vk_propertie
 
       /* VK_KHR_compute_shader_derivatives */
       .meshAndTaskShaderDerivatives = true,
+
+      /* VK_NV_cooperative_matrix2 */
+      .cooperativeMatrixFlexibleDimensionsMaxDimension = 1024,
    };
 
    /* Vulkan 1.0 */
@@ -1366,6 +1416,10 @@ lvp_get_properties(const struct lvp_physical_device *device, struct vk_propertie
    /* VK_EXT_mesh_shader */
    p->maxMeshPayloadAndSharedMemorySize = p->maxTaskPayloadSize + p->maxMeshSharedMemorySize; /* 28K min required */
    p->maxMeshPayloadAndOutputMemorySize = p->maxTaskPayloadSize + p->maxMeshOutputMemorySize; /* 47K min required */
+
+   /* VK_KHR_cooperative_matrix */
+   p->cooperativeMatrixSupportedStages = VK_SHADER_STAGE_COMPUTE_BIT;
+
 }
 
 static VkResult VKAPI_CALL
@@ -1402,18 +1456,22 @@ lvp_physical_device_init(struct lvp_physical_device *device,
 
    device->max_images = device->pscreen->shader_caps[MESA_SHADER_FRAGMENT].max_shader_images;
    device->vk.supported_extensions = lvp_device_extensions_supported;
-#ifdef HAVE_LIBDRM
+#if defined(HAVE_LIBDRM) && defined(HAVE_LINUX_UDMABUF_H)
    int dmabuf_bits = DRM_PRIME_CAP_EXPORT | DRM_PRIME_CAP_IMPORT;
    int supported_dmabuf_bits = device->pscreen->caps.dmabuf;
-   /* if import or export is supported then EXT_external_memory_dma_buf is supported */
-   if (supported_dmabuf_bits)
-      device->vk.supported_extensions.EXT_external_memory_dma_buf = true;
-   if ((supported_dmabuf_bits & dmabuf_bits) == dmabuf_bits)
+   const bool dmabuf_import_export = (supported_dmabuf_bits & dmabuf_bits) == dmabuf_bits;
+   const char *engine_name = instance->vk.app_info.engine_name;
+   /* if import or export is supported then EXT_external_memory_dma_buf is supported
+    *
+    * For zink, advertise the extension only when both import and export are
+    * supported since zink has assumed both for dmabuf support.
+    */
+   if (engine_name && strcmp(engine_name, "mesa zink") == 0)
+      device->vk.supported_extensions.EXT_external_memory_dma_buf = dmabuf_import_export;
+   else
+      device->vk.supported_extensions.EXT_external_memory_dma_buf = !!supported_dmabuf_bits;
+   if (dmabuf_import_export)
       device->vk.supported_extensions.EXT_image_drm_format_modifier = true;
-   if (device->pscreen->caps.native_fence_fd) {
-      device->vk.supported_extensions.KHR_external_semaphore_fd = true;
-      device->vk.supported_extensions.KHR_external_fence_fd = true;
-   }
    if (supported_dmabuf_bits & DRM_PRIME_CAP_IMPORT)
       device->vk.supported_extensions.ANDROID_external_memory_android_hardware_buffer = true;
 #endif
@@ -1491,8 +1549,6 @@ VKAPI_ATTR VkResult VKAPI_CALL lvp_CreateInstance(
       vk_free(pAllocator, instance);
       return vk_error(NULL, result);
    }
-
-   instance->apiVersion = LVP_API_VERSION;
 
    instance->vk.physical_devices.enumerate = lvp_enumerate_physical_devices;
    instance->vk.physical_devices.destroy = lvp_destroy_physical_device;
@@ -2082,7 +2138,7 @@ VKAPI_ATTR VkResult VKAPI_CALL lvp_AllocateMemory(
    }
 #if DETECT_OS_ANDROID
    else if (mem->vk.ahardware_buffer) {
-      error = lvp_import_ahb_memory(device, mem);
+      error = lvp_import_ahb_memory(device, pAllocateInfo, mem);
       if (error != VK_SUCCESS)
          goto fail;
    }
@@ -2104,13 +2160,8 @@ VKAPI_ATTR VkResult VKAPI_CALL lvp_AllocateMemory(
          error = VK_ERROR_INVALID_EXTERNAL_HANDLE;
          goto fail;
       }
-      if (mem->vk.export_handle_types == mem->vk.import_handle_type) {
-         mem->backed_fd = import_info->fd;
-      }
-      else {
-         close(import_info->fd);
-      }
 
+      mem->backed_fd = import_info->fd;
       mem->vk.size = size;
       mem->map = device->pscreen->map_memory(device->pscreen, mem->pmem);
       mem->memory_type = memory_type;
@@ -2355,6 +2406,8 @@ VKAPI_ATTR void VKAPI_CALL lvp_GetImageMemoryRequirements2(
    const VkImageMemoryRequirementsInfo2       *pInfo,
    VkMemoryRequirements2                      *pMemoryRequirements)
 {
+   VK_FROM_HANDLE(lvp_image, image, pInfo->image);
+
    lvp_GetImageMemoryRequirements(device, pInfo->image,
                                   &pMemoryRequirements->memoryRequirements);
 
@@ -2363,7 +2416,8 @@ VKAPI_ATTR void VKAPI_CALL lvp_GetImageMemoryRequirements2(
       case VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS: {
          VkMemoryDedicatedRequirements *req =
             (VkMemoryDedicatedRequirements *) ext;
-         req->requiresDedicatedAllocation = false;
+         req->requiresDedicatedAllocation =
+            vk_image_is_android_hardware_buffer(&image->vk);
          req->prefersDedicatedAllocation = req->requiresDedicatedAllocation;
          break;
       }
@@ -2391,9 +2445,7 @@ VKAPI_ATTR VkResult VKAPI_CALL lvp_BindBufferMemory2(VkDevice _device,
       VK_FROM_HANDLE(lvp_buffer, buffer, pBindInfos[i].buffer);
       VkBindMemoryStatusKHR *status = (void*)vk_find_struct_const(&pBindInfos[i], BIND_MEMORY_STATUS_KHR);
 
-      buffer->mem = mem;
       buffer->map = (char*)mem->map + pBindInfos[i].memoryOffset;
-      buffer->offset = pBindInfos[i].memoryOffset;
       device->pscreen->resource_bind_backing(device->pscreen,
                                              buffer->bo,
                                              mem->pmem,
@@ -2410,24 +2462,19 @@ static VkResult
 lvp_image_plane_bind(struct lvp_device *device,
                      struct lvp_image_plane *plane,
                      struct lvp_device_memory *mem,
-                     VkDeviceSize memory_offset,
-                     VkDeviceSize *plane_offset)
+                     VkDeviceSize memory_offset)
 {
    if (!device->pscreen->resource_bind_backing(device->pscreen,
                                                plane->bo,
                                                mem->pmem,
                                                0, 0,
-                                               memory_offset + *plane_offset)) {
+                                               memory_offset + plane->offset)) {
       /* This is probably caused by the texture being too large, so let's
        * report this as the *closest* allowed error-code. It's not ideal,
        * but it's unlikely that anyone will care too much.
        */
       return vk_error(device, VK_ERROR_OUT_OF_DEVICE_MEMORY);
    }
-   plane->pmem = mem->pmem;
-   plane->memory_offset = memory_offset;
-   plane->plane_offset = *plane_offset;
-   *plane_offset += plane->size;
    return VK_SUCCESS;
 }
 
@@ -2442,8 +2489,7 @@ lvp_image_bind(struct lvp_device *device,
 
    if (!mem) {
 #if DETECT_OS_ANDROID
-      /* TODO handle VkNativeBufferANDROID */
-      UNREACHABLE("VkBindImageMemoryInfo with no memory");
+      return lvp_bind_anb_memory(device, bind_info);
 #else
       const VkBindImageMemorySwapchainInfoKHR *swapchain_info =
          vk_find_struct_const(bind_info->pNext,
@@ -2456,20 +2502,19 @@ lvp_image_bind(struct lvp_device *device,
    }
 
    assert(mem);
-   uint64_t offset_B = 0;
    if (image->disjoint) {
       const VkBindImagePlaneMemoryInfo *plane_info =
          vk_find_struct_const(bind_info->pNext, BIND_IMAGE_PLANE_MEMORY_INFO);
       const uint8_t plane =
          lvp_image_aspects_to_plane(image, plane_info->planeAspect);
       result = lvp_image_plane_bind(device, &image->planes[plane], mem,
-                                    mem_offset, &offset_B);
+                                    mem_offset);
       if (result != VK_SUCCESS)
          return result;
    } else {
       for (unsigned plane = 0; plane < image->plane_count; plane++) {
          result = lvp_image_plane_bind(device, &image->planes[plane], mem,
-                                       mem_offset + image->offset, &offset_B);
+                                       mem_offset);
          if (result != VK_SUCCESS)
             return result;
       }
@@ -2728,11 +2773,9 @@ VKAPI_ATTR void VKAPI_CALL lvp_GetPhysicalDeviceExternalFenceProperties(
    const VkPhysicalDeviceExternalFenceInfo    *pExternalFenceInfo,
    VkExternalFenceProperties                  *pExternalFenceProperties)
 {
-   VK_FROM_HANDLE(lvp_physical_device, physical_device, physicalDevice);
    const VkExternalFenceHandleTypeFlagBits handle_type = pExternalFenceInfo->handleType;
 
-   if (handle_type == VK_EXTERNAL_FENCE_HANDLE_TYPE_SYNC_FD_BIT &&
-       physical_device->pscreen->caps.native_fence_fd) {
+   if (handle_type == VK_EXTERNAL_FENCE_HANDLE_TYPE_SYNC_FD_BIT) {
       pExternalFenceProperties->exportFromImportedHandleTypes =
          VK_EXTERNAL_FENCE_HANDLE_TYPE_SYNC_FD_BIT;
       pExternalFenceProperties->compatibleHandleTypes =
@@ -2752,15 +2795,13 @@ VKAPI_ATTR void VKAPI_CALL lvp_GetPhysicalDeviceExternalSemaphoreProperties(
    const VkPhysicalDeviceExternalSemaphoreInfo *pExternalSemaphoreInfo,
    VkExternalSemaphoreProperties               *pExternalSemaphoreProperties)
 {
-   VK_FROM_HANDLE(lvp_physical_device, physical_device, physicalDevice);
    const VkSemaphoreTypeCreateInfo *type_info =
       vk_find_struct_const(pExternalSemaphoreInfo->pNext, SEMAPHORE_TYPE_CREATE_INFO);
    const VkSemaphoreType type = !type_info ? VK_SEMAPHORE_TYPE_BINARY : type_info->semaphoreType;
    const VkExternalSemaphoreHandleTypeFlagBits handle_type = pExternalSemaphoreInfo->handleType;
 
    if (type == VK_SEMAPHORE_TYPE_BINARY &&
-       handle_type == VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT &&
-       physical_device->pscreen->caps.native_fence_fd) {
+       handle_type == VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT) {
       pExternalSemaphoreProperties->exportFromImportedHandleTypes =
          VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
       pExternalSemaphoreProperties->compatibleHandleTypes =
@@ -2863,4 +2904,98 @@ VKAPI_ATTR void VKAPI_CALL lvp_GetRenderingAreaGranularityKHR(
 {
    VkExtent2D tile_size = {64, 64};
    *pGranularity = tile_size;
+}
+
+struct matrix_prop {
+   VkComponentTypeKHR a_type;
+   VkComponentTypeKHR b_type;
+   VkComponentTypeKHR c_type;
+   VkComponentTypeKHR r_type;
+};
+
+static void
+fill_matrix_prop_khr(struct __vk_outarray *base, struct matrix_prop *prop)
+{
+   vk_outarray(VkCooperativeMatrixPropertiesKHR) *out = (void *)base;
+
+   vk_outarray_append_typed(VkCooperativeMatrixPropertiesKHR, out, p)
+   {
+      *p = (struct VkCooperativeMatrixPropertiesKHR){.sType = VK_STRUCTURE_TYPE_COOPERATIVE_MATRIX_PROPERTIES_KHR,
+                                                     .MSize = 8,
+                                                     .NSize = 8,
+                                                     .KSize = 8,
+                                                     .AType = prop->a_type,
+                                                     .BType = prop->b_type,
+                                                     .CType = prop->c_type,
+                                                     .ResultType = prop->r_type,
+                                                     .saturatingAccumulation = false,
+                                                     .scope = VK_SCOPE_SUBGROUP_KHR};
+   }
+}
+
+static void
+fill_flexible_matrix_prop_nv(struct __vk_outarray *base, struct matrix_prop *prop)
+{
+   vk_outarray(VkCooperativeMatrixFlexibleDimensionsPropertiesNV) *out = (void *)base;
+
+   vk_outarray_append_typed(VkCooperativeMatrixFlexibleDimensionsPropertiesNV, out, p)
+   {
+      *p = (struct VkCooperativeMatrixFlexibleDimensionsPropertiesNV){
+         .sType = VK_STRUCTURE_TYPE_COOPERATIVE_MATRIX_FLEXIBLE_DIMENSIONS_PROPERTIES_NV,
+         .MGranularity = 8,
+         .NGranularity = 8,
+         .KGranularity = 8,
+         .AType = prop->a_type,
+         .BType = prop->b_type,
+         .CType = prop->c_type,
+         .ResultType = prop->r_type,
+         .saturatingAccumulation = false,
+         .scope = VK_SCOPE_SUBGROUP_KHR};
+   }
+}
+
+static void
+fill_array_sizes_structs(struct __vk_outarray *base,
+                         void (*array_size_cb)(struct __vk_outarray *base, struct matrix_prop *prop))
+{
+   struct matrix_prop prop;
+
+   prop.a_type = VK_COMPONENT_TYPE_FLOAT16_KHR;
+   prop.b_type = VK_COMPONENT_TYPE_FLOAT16_KHR;
+   for (unsigned fp32 = 0; fp32 < 2; fp32++) {
+      prop.c_type = fp32 == 1 ? VK_COMPONENT_TYPE_FLOAT32_KHR : VK_COMPONENT_TYPE_FLOAT16_KHR;
+      prop.r_type = fp32 == 1 ? VK_COMPONENT_TYPE_FLOAT32_KHR : VK_COMPONENT_TYPE_FLOAT16_KHR;
+      (*array_size_cb)(base, &prop);
+   }
+
+   prop.a_type = VK_COMPONENT_TYPE_UINT8_KHR;
+   prop.b_type = VK_COMPONENT_TYPE_UINT8_KHR;
+   prop.c_type = VK_COMPONENT_TYPE_UINT32_KHR;
+   prop.r_type = VK_COMPONENT_TYPE_UINT32_KHR;
+   (*array_size_cb)(base, &prop);
+
+   prop.a_type = VK_COMPONENT_TYPE_SINT8_KHR;
+   prop.b_type = VK_COMPONENT_TYPE_SINT8_KHR;
+   prop.c_type = VK_COMPONENT_TYPE_SINT32_KHR;
+   prop.r_type = VK_COMPONENT_TYPE_SINT32_KHR;
+   (*array_size_cb)(base, &prop);
+}
+VKAPI_ATTR VkResult VKAPI_CALL lvp_GetPhysicalDeviceCooperativeMatrixPropertiesKHR(
+   VkPhysicalDevice physicalDevice,
+   uint32_t *pPropertyCount,
+   VkCooperativeMatrixPropertiesKHR *pProperties)
+{
+   VK_OUTARRAY_MAKE_TYPED(VkCooperativeMatrixPropertiesKHR, out, pProperties, pPropertyCount);
+   fill_array_sizes_structs(&out.base, fill_matrix_prop_khr);
+   return vk_outarray_status(&out);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL
+lvp_GetPhysicalDeviceCooperativeMatrixFlexibleDimensionsPropertiesNV(
+   VkPhysicalDevice physicalDevice, uint32_t *pPropertyCount,
+   VkCooperativeMatrixFlexibleDimensionsPropertiesNV *pProperties)
+{
+   VK_OUTARRAY_MAKE_TYPED(VkCooperativeMatrixFlexibleDimensionsPropertiesNV, out, pProperties, pPropertyCount);
+   fill_array_sizes_structs(&out.base, fill_flexible_matrix_prop_nv);
+   return vk_outarray_status(&out);
 }

@@ -35,7 +35,7 @@ struct radv_amdgpu_winsys {
    FILE *bo_history_logfile;
    bool chain_ib;
    bool zero_all_vram_allocs;
-   bool reserve_vmid;
+   bool debug_vm;
    uint64_t perftest;
 
    alignas(8) uint64_t allocated_vram;
@@ -63,6 +63,11 @@ struct radv_amdgpu_winsys {
    uint64_t vm_timeline_seq_num;
 
    uint32_t refcount;
+
+   struct {
+      /* A zero-allocated BO used to map the LOW address space of virtual allocations. */
+      struct radeon_winsys_bo *bo;
+   } null_prt_bug;
 };
 
 static inline struct radv_amdgpu_winsys *

@@ -9,13 +9,13 @@
 
 #include <stdbool.h>
 #include <stddef.h>
-#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 struct radeon_info;
+struct ac_compiler_info;
 
 struct ac_shader_config {
    unsigned num_sgprs;
@@ -35,7 +35,8 @@ struct ac_shader_config {
 };
 
 void ac_parse_shader_binary_config(const char *data, size_t nbytes, unsigned wave_size,
-                                   const struct radeon_info *info, struct ac_shader_config *conf);
+                                   const struct ac_compiler_info *compiler_info,
+                                   struct ac_shader_config *conf);
 
 unsigned ac_align_shader_binary_for_prefetch(const struct radeon_info *info, unsigned size);
 

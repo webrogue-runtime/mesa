@@ -20,7 +20,7 @@
 #include "git_sha1.h"
 #include "util/detect_os.h"
 #include "util/disk_cache.h"
-#include "util/mesa-sha1.h"
+#include "util/mesa-blake3.h"
 
 #include "vk_android.h"
 #include "vk_device.h"
@@ -120,8 +120,10 @@ nvk_get_device_extensions(const struct nvk_instance *instance,
       .KHR_compute_shader_derivatives = info->cls_eng3d >= TURING_A,
       .KHR_cooperative_matrix = info->cls_eng3d >= TURING_A,
       .KHR_copy_commands2 = true,
+      .KHR_copy_memory_indirect = true,
       .KHR_create_renderpass2 = true,
       .KHR_dedicated_allocation = true,
+      .KHR_depth_clamp_zero_one = true,
       .KHR_depth_stencil_resolve = true,
       .KHR_descriptor_update_template = true,
       .KHR_device_group = true,
@@ -171,6 +173,7 @@ nvk_get_device_extensions(const struct nvk_instance *instance,
 #endif
       .KHR_push_descriptor = true,
       .KHR_relaxed_block_layout = true,
+      .KHR_robustness2 = true,
       .KHR_sampler_mirror_clamp_to_edge = true,
       .KHR_sampler_ycbcr_conversion = true,
       .KHR_separate_depth_stencil_layouts = true,
@@ -195,6 +198,7 @@ nvk_get_device_extensions(const struct nvk_instance *instance,
       .KHR_storage_buffer_storage_class = true,
 #ifdef NVK_USE_WSI_PLATFORM
       .KHR_swapchain = true,
+      .KHR_swapchain_maintenance1 = true,
       .KHR_swapchain_mutable_format = true,
 #endif
       .KHR_synchronization2 = true,
@@ -261,6 +265,9 @@ nvk_get_device_extensions(const struct nvk_instance *instance,
       .EXT_pipeline_robustness = true,
       .EXT_physical_device_drm = true,
       .EXT_post_depth_coverage = info->cls_eng3d >= MAXWELL_B,
+#ifdef NVK_USE_WSI_PLATFORM
+      .EXT_present_timing = true,
+#endif
       .EXT_primitive_topology_list_restart = true,
       .EXT_private_data = true,
       .EXT_primitives_generated_query = true,
@@ -471,6 +478,9 @@ nvk_get_device_features(const struct nv_device_info *info,
       .hostImageCopy = info->cls_eng3d >= TURING_A,
       .pushDescriptor = true,
 
+      /* VK_KHR_copy_memory_indirect */
+      .indirectMemoryCopy = true,
+
       /* VK_KHR_cooperative_matrix */
       /* TU11X can run coop matrix but the performances are abysal */
       .cooperativeMatrix = info->cls_eng3d >= TURING_A && !is_tu11x,
@@ -577,7 +587,7 @@ nvk_get_device_features(const struct nv_device_info *info,
       /* VK_EXT_depth_clamp_control */
       .depthClampControl = true,
 
-      /* VK_EXT_depth_clamp_zero_one */
+      /* VK_KHR_depth_clamp_zero_one */
       .depthClampZeroOne = true,
 
       /* VK_EXT_depth_clip_control */
@@ -588,7 +598,11 @@ nvk_get_device_features(const struct nv_device_info *info,
 
       /* VK_EXT_descriptor_buffer */
       .descriptorBuffer = info->cls_eng3d >= MAXWELL_A,
-      .descriptorBufferCaptureReplay = info->cls_eng3d >= MAXWELL_A,
+      /*
+       * CaptureReplay is disabled until we fix
+       * https://gitlab.freedesktop.org/mesa/mesa/-/issues/14518
+       */
+      .descriptorBufferCaptureReplay = false, /* info->cls_eng3d >= MAXWELL_A, */
       .descriptorBufferImageLayoutIgnored = info->cls_eng3d >= MAXWELL_A,
       .descriptorBufferPushDescriptors = info->cls_eng3d >= MAXWELL_A,
 
@@ -658,7 +672,7 @@ nvk_get_device_features(const struct nv_device_info *info,
       .imageSlicedViewOf3D = true,
 
 #ifdef NVK_USE_WSI_PLATFORM
-      /* VK_EXT_swapchain_maintenance1 */
+      /* VK_KHR_swapchain_maintenance1 */
       .swapchainMaintenance1 = true,
 #endif
 
@@ -700,7 +714,7 @@ nvk_get_device_features(const struct nv_device_info *info,
       .provokingVertexLast = true,
       .transformFeedbackPreservesProvokingVertex = true,
 
-      /* VK_EXT_robustness2 */
+      /* VK_KHR_robustness2 */
       .robustBufferAccess2 = true,
       .robustImageAccess2 = true,
       .nullDescriptor = true,
@@ -752,6 +766,11 @@ nvk_get_device_features(const struct nv_device_info *info,
 
       /* VK_KHR_present_wait2 */
       .presentWait2 = true,
+
+      /* VK_EXT_present_timing */
+      .presentTiming = true,
+      .presentAtRelativeTime = true,
+      .presentAtAbsoluteTime = true,
 #endif
    };
 }
@@ -761,6 +780,7 @@ nvk_get_device_properties(const struct nvk_instance *instance,
                           const struct nv_device_info *info,
                           struct vk_properties *properties)
 {
+   /* Note: update nir_shader_compiler_options.max_samples when changing this. */
    const VkSampleCountFlagBits sample_counts = VK_SAMPLE_COUNT_1_BIT |
                                                VK_SAMPLE_COUNT_2_BIT |
                                                VK_SAMPLE_COUNT_4_BIT |
@@ -789,7 +809,7 @@ nvk_get_device_properties(const struct nvk_instance *instance,
       .maxImageArrayLayers = 2048,
       .maxTexelBufferElements = 128 * 1024 * 1024,
       .maxUniformBufferRange = 65536,
-      .maxStorageBufferRange = UINT32_MAX,
+      .maxStorageBufferRange = 1ull << 31,
       .maxPushConstantsSize = NVK_MAX_PUSH_SIZE,
       .maxMemoryAllocationCount = 4096,
       .maxSamplerAllocationCount = 4000,
@@ -832,7 +852,7 @@ nvk_get_device_properties(const struct nvk_instance *instance,
       .maxFragmentInputComponents = 128,
       .maxFragmentOutputAttachments = NVK_MAX_RTS,
       .maxFragmentDualSrcAttachments = 1,
-      .maxFragmentCombinedOutputResources = 16,
+      .maxFragmentCombinedOutputResources = NVK_MAX_RTS + NVK_MAX_DESCRIPTORS,
       /* Nvidia limits this to 48kB for consistency reasons, we could lift the
        * limit if we wanted to.
        */
@@ -1052,6 +1072,9 @@ nvk_get_device_properties(const struct nvk_instance *instance,
        */
       .pipelineBinaryCompressedData = false,
 
+      /* VK_KHR_copy_memory_indirect */
+      .supportedQueues = VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT,
+
       /* VK_EXT_conservative_rasterization */
       .primitiveOverestimationSize = info->cls_eng3d >= VOLTA_A ? 1.0f / 512.0f : 0.0,
       .maxExtraPrimitiveOverestimationSize = 0.75,
@@ -1083,7 +1106,7 @@ nvk_get_device_properties(const struct nvk_instance *instance,
       .samplerCaptureReplayDescriptorDataSize =
          sizeof(struct nvk_sampler_capture),
       .accelerationStructureCaptureReplayDescriptorDataSize = 0, // todo
-      .samplerDescriptorSize = sizeof(struct nvk_sampled_image_descriptor),
+      .EDBsamplerDescriptorSize = sizeof(struct nvk_sampled_image_descriptor),
       .combinedImageSamplerDescriptorSize = sizeof(struct nvk_sampled_image_descriptor),
       .sampledImageDescriptorSize = sizeof(struct nvk_sampled_image_descriptor),
       .storageImageDescriptorSize = sizeof(struct nvk_storage_image_descriptor),
@@ -1173,7 +1196,7 @@ nvk_get_device_properties(const struct nvk_instance *instance,
       .provokingVertexModePerPipeline = true,
       .transformFeedbackPreservesTriangleFanProvokingVertex = true,
 
-      /* VK_EXT_robustness2 */
+      /* VK_KHR_robustness2 */
       .robustStorageBufferAccessSizeAlignment = NVK_SSBO_BOUNDS_CHECK_ALIGNMENT,
       .robustUniformBufferAccessSizeAlignment = nvk_min_cbuf_alignment(info),
 
@@ -1260,6 +1283,8 @@ nvk_get_device_properties(const struct nvk_instance *instance,
       VK_IMAGE_LAYOUT_PREINITIALIZED,
       VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL,
       VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL,
+      VK_IMAGE_LAYOUT_FRAGMENT_SHADING_RATE_ATTACHMENT_OPTIMAL_KHR,
+      VK_IMAGE_LAYOUT_RENDERING_LOCAL_READ,
       VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
       VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL,
       VK_IMAGE_LAYOUT_STENCIL_ATTACHMENT_OPTIMAL,
@@ -1302,24 +1327,24 @@ nvk_physical_device_init_pipeline_cache(struct nvk_physical_device *pdev)
 {
    const struct nvk_instance *instance = nvk_physical_device_instance(pdev);
 
-   struct mesa_sha1 sha_ctx;
-   _mesa_sha1_init(&sha_ctx);
+   blake3_hasher blake3_ctx;
+   _mesa_blake3_init(&blake3_ctx);
 
-   _mesa_sha1_update(&sha_ctx, instance->driver_build_sha,
+   _mesa_blake3_update(&blake3_ctx, instance->driver_build_sha,
                      sizeof(instance->driver_build_sha));
 
-   _mesa_sha1_update(&sha_ctx, &pdev->info.chipset,
+   _mesa_blake3_update(&blake3_ctx, &pdev->info.chipset,
                      sizeof(pdev->info.chipset));
 
    const uint64_t compiler_flags = nvk_physical_device_compiler_flags(pdev);
-   _mesa_sha1_update(&sha_ctx, &compiler_flags, sizeof(compiler_flags));
+   _mesa_blake3_update(&blake3_ctx, &compiler_flags, sizeof(compiler_flags));
 
-   unsigned char sha[SHA1_DIGEST_LENGTH];
-   _mesa_sha1_final(&sha_ctx, sha);
+   unsigned char blake3[BLAKE3_KEY_LEN];
+   _mesa_blake3_final(&blake3_ctx, blake3);
 
-   STATIC_ASSERT(SHA1_DIGEST_LENGTH >= VK_UUID_SIZE);
-   memcpy(pdev->vk.properties.pipelineCacheUUID, sha, VK_UUID_SIZE);
-   memcpy(pdev->vk.properties.shaderBinaryUUID, sha, VK_UUID_SIZE);
+   STATIC_ASSERT(BLAKE3_KEY_LEN >= VK_UUID_SIZE);
+   memcpy(pdev->vk.properties.pipelineCacheUUID, blake3, VK_UUID_SIZE);
+   memcpy(pdev->vk.properties.shaderBinaryUUID, blake3, VK_UUID_SIZE);
 
 #ifdef ENABLE_SHADER_CACHE
    char renderer[10];
@@ -1327,8 +1352,8 @@ nvk_physical_device_init_pipeline_cache(struct nvk_physical_device *pdev)
                                pdev->info.chipset);
    assert(len == sizeof(renderer) - 2);
 
-   char timestamp[41];
-   _mesa_sha1_format(timestamp, instance->driver_build_sha);
+   char timestamp[BLAKE3_HEX_LEN];
+   _mesa_blake3_format(timestamp, instance->driver_build_sha);
 
    const uint64_t driver_flags = nvk_physical_device_compiler_flags(pdev);
    pdev->vk.disk_cache = disk_cache_create(renderer, timestamp, driver_flags);
@@ -1578,6 +1603,13 @@ nvk_create_drm_physical_device(struct vk_instance *_instance,
                      VK_QUEUE_SPARSE_BINDING_BIT,
       .queue_count = 1,
    };
+   if (pdev->info.has_transfer_queue) {
+      pdev->queue_families[pdev->queue_family_count++] = (struct nvk_queue_family) {
+         .queue_flags = VK_QUEUE_TRANSFER_BIT |
+                        VK_QUEUE_SPARSE_BINDING_BIT,
+         .queue_count = 2,
+      };
+   }
    assert(pdev->queue_family_count <= ARRAY_SIZE(pdev->queue_families));
 
    pdev->vk.supported_sync_types = nvkmd->sync_types;
@@ -1862,40 +1894,40 @@ nvk_GetPhysicalDeviceCooperativeMatrixPropertiesKHR(VkPhysicalDevice physicalDev
             *p = (struct VkCooperativeMatrixPropertiesKHR){
                .sType = VK_STRUCTURE_TYPE_COOPERATIVE_MATRIX_PROPERTIES_KHR,
                .MSize = 16,
-               .NSize = 8,
-               .KSize = 8,
-               .AType = VK_COMPONENT_TYPE_FLOAT16_KHR,
-               .BType = VK_COMPONENT_TYPE_FLOAT16_KHR,
-               .CType = input_type_cd,
-               .ResultType = input_type_cd,
-               .saturatingAccumulation = false,
-               .scope = VK_SCOPE_SUBGROUP_KHR
-            };
-         }
-
-         vk_outarray_append_typed(VkCooperativeMatrixPropertiesKHR, &out, p)
-         {
-            *p = (struct VkCooperativeMatrixPropertiesKHR){
-               .sType = VK_STRUCTURE_TYPE_COOPERATIVE_MATRIX_PROPERTIES_KHR,
-               .MSize = 16,
-               .NSize = 8,
-               .KSize = 16,
-               .AType = VK_COMPONENT_TYPE_FLOAT16_KHR,
-               .BType = VK_COMPONENT_TYPE_FLOAT16_KHR,
-               .CType = input_type_cd,
-               .ResultType = input_type_cd,
-               .saturatingAccumulation = false,
-               .scope = VK_SCOPE_SUBGROUP_KHR
-            };
-         }
-
-         vk_outarray_append_typed(VkCooperativeMatrixPropertiesKHR, &out, p)
-         {
-            *p = (struct VkCooperativeMatrixPropertiesKHR){
-               .sType = VK_STRUCTURE_TYPE_COOPERATIVE_MATRIX_PROPERTIES_KHR,
-               .MSize = 16,
                .NSize = 16,
                .KSize = 16,
+               .AType = VK_COMPONENT_TYPE_FLOAT16_KHR,
+               .BType = VK_COMPONENT_TYPE_FLOAT16_KHR,
+               .CType = input_type_cd,
+               .ResultType = input_type_cd,
+               .saturatingAccumulation = false,
+               .scope = VK_SCOPE_SUBGROUP_KHR
+            };
+         }
+
+         vk_outarray_append_typed(VkCooperativeMatrixPropertiesKHR, &out, p)
+         {
+            *p = (struct VkCooperativeMatrixPropertiesKHR){
+               .sType = VK_STRUCTURE_TYPE_COOPERATIVE_MATRIX_PROPERTIES_KHR,
+               .MSize = 16,
+               .NSize = 8,
+               .KSize = 16,
+               .AType = VK_COMPONENT_TYPE_FLOAT16_KHR,
+               .BType = VK_COMPONENT_TYPE_FLOAT16_KHR,
+               .CType = input_type_cd,
+               .ResultType = input_type_cd,
+               .saturatingAccumulation = false,
+               .scope = VK_SCOPE_SUBGROUP_KHR
+            };
+         }
+
+         vk_outarray_append_typed(VkCooperativeMatrixPropertiesKHR, &out, p)
+         {
+            *p = (struct VkCooperativeMatrixPropertiesKHR){
+               .sType = VK_STRUCTURE_TYPE_COOPERATIVE_MATRIX_PROPERTIES_KHR,
+               .MSize = 16,
+               .NSize = 8,
+               .KSize = 8,
                .AType = VK_COMPONENT_TYPE_FLOAT16_KHR,
                .BType = VK_COMPONENT_TYPE_FLOAT16_KHR,
                .CType = input_type_cd,
@@ -1918,22 +1950,36 @@ nvk_GetPhysicalDeviceCooperativeMatrixPropertiesKHR(VkPhysicalDevice physicalDev
             if (result_type == VK_COMPONENT_TYPE_UINT32_KHR && sat)
                continue;
 
-            if (pdev->info.cls_compute < BLACKWELL_COMPUTE_A) {
-               vk_outarray_append_typed(VkCooperativeMatrixPropertiesKHR, &out, p)
-               {
-                  *p = (struct VkCooperativeMatrixPropertiesKHR){
-                     .sType = VK_STRUCTURE_TYPE_COOPERATIVE_MATRIX_PROPERTIES_KHR,
-                     .MSize = 8,
-                     .NSize = 8,
-                     .KSize = 16,
-                     .AType = input_type_ab,
-                     .BType = input_type_ab,
-                     .CType = result_type,
-                     .ResultType = result_type,
-                     .saturatingAccumulation = sat,
+            vk_outarray_append_typed(VkCooperativeMatrixPropertiesKHR, &out, p)
+            {
+               *p = (struct VkCooperativeMatrixPropertiesKHR){
+                  .sType = VK_STRUCTURE_TYPE_COOPERATIVE_MATRIX_PROPERTIES_KHR,
+                  .MSize = 16,
+                  .NSize = 16,
+                  .KSize = 32,
+                  .AType = input_type_ab,
+                  .BType = input_type_ab,
+                  .CType = result_type,
+                  .ResultType = result_type,
+                  .saturatingAccumulation = sat,
                   .scope = VK_SCOPE_SUBGROUP_KHR
-                  };
-               }
+               };
+            }
+
+            vk_outarray_append_typed(VkCooperativeMatrixPropertiesKHR, &out, p)
+            {
+               *p = (struct VkCooperativeMatrixPropertiesKHR){
+                  .sType = VK_STRUCTURE_TYPE_COOPERATIVE_MATRIX_PROPERTIES_KHR,
+                  .MSize = 16,
+                  .NSize = 8,
+                  .KSize = 32,
+                  .AType = input_type_ab,
+                  .BType = input_type_ab,
+                  .CType = result_type,
+                  .ResultType = result_type,
+                  .saturatingAccumulation = sat,
+                  .scope = VK_SCOPE_SUBGROUP_KHR
+               };
             }
 
             if (pdev->info.cls_compute >= AMPERE_COMPUTE_A) {
@@ -1954,36 +2000,22 @@ nvk_GetPhysicalDeviceCooperativeMatrixPropertiesKHR(VkPhysicalDevice physicalDev
                }
             }
 
-            vk_outarray_append_typed(VkCooperativeMatrixPropertiesKHR, &out, p)
-            {
-               *p = (struct VkCooperativeMatrixPropertiesKHR){
-                  .sType = VK_STRUCTURE_TYPE_COOPERATIVE_MATRIX_PROPERTIES_KHR,
-                  .MSize = 16,
-                  .NSize = 8,
-                  .KSize = 32,
-                  .AType = input_type_ab,
-                  .BType = input_type_ab,
-                  .CType = result_type,
-                  .ResultType = result_type,
-                  .saturatingAccumulation = sat,
+            if (pdev->info.cls_compute < BLACKWELL_COMPUTE_A) {
+               vk_outarray_append_typed(VkCooperativeMatrixPropertiesKHR, &out, p)
+               {
+                  *p = (struct VkCooperativeMatrixPropertiesKHR){
+                     .sType = VK_STRUCTURE_TYPE_COOPERATIVE_MATRIX_PROPERTIES_KHR,
+                     .MSize = 8,
+                     .NSize = 8,
+                     .KSize = 16,
+                     .AType = input_type_ab,
+                     .BType = input_type_ab,
+                     .CType = result_type,
+                     .ResultType = result_type,
+                     .saturatingAccumulation = sat,
                   .scope = VK_SCOPE_SUBGROUP_KHR
-               };
-            }
-
-            vk_outarray_append_typed(VkCooperativeMatrixPropertiesKHR, &out, p)
-            {
-               *p = (struct VkCooperativeMatrixPropertiesKHR){
-                  .sType = VK_STRUCTURE_TYPE_COOPERATIVE_MATRIX_PROPERTIES_KHR,
-                  .MSize = 16,
-                  .NSize = 16,
-                  .KSize = 32,
-                  .AType = input_type_ab,
-                  .BType = input_type_ab,
-                  .CType = result_type,
-                  .ResultType = result_type,
-                  .saturatingAccumulation = sat,
-                  .scope = VK_SCOPE_SUBGROUP_KHR
-               };
+                  };
+               }
             }
          }
       }

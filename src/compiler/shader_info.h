@@ -138,6 +138,9 @@ typedef struct shader_info {
    /** Bitfield of which textures are used by texelFetch() */
    BITSET_DECLARE(textures_used_by_txf, 128);
 
+   /** Bitfield of which textures are texel buffers */
+   BITSET_DECLARE(texture_buffers, 128);
+
    /** Bitfield of which samplers are used */
    BITSET_DECLARE(samplers_used, 32);
 
@@ -244,10 +247,27 @@ typedef struct shader_info {
    /* Whether flrp has been lowered. */
    bool flrp_lowered:1;
 
+   /* Whether nir_opt_constant_folding should not fold offset srcs of
+    * IO intrinsics.
+    */
+   bool disable_input_offset_src_constant_folding:1;
+   bool disable_output_offset_src_constant_folding:1;
+
    /* Whether nir_lower_io has been called to lower derefs.
     * nir_variables for inputs and outputs might not be present in the IR.
     */
    bool io_lowered:1;
+
+   /* If true, fail an assertion in nir_opt_dce if a dead input is eliminated.
+    *
+    * This is a debug aid to easily identify passes that cause shader inputs
+    * to become dead after nir_opt_varyings when it's preferrable that dead
+    * shader inputs are identified before nir_opt_varyings.
+    *
+    * It shouldn't be enabled by default because inputs can become dead late
+    * for all sorts of reasons.
+    */
+   bool assert_inputs_not_dead : 1;
 
    /** Has nir_lower_var_copies called. To avoid calling any
     * lowering/optimization that would introduce any copy_deref later.
@@ -266,6 +286,9 @@ typedef struct shader_info {
 
    /* Whether ARB_bindless_texture ops or variables are used */
    bool uses_bindless : 1;
+
+   /* Number of embedded samplers used by this shader */
+   bool uses_embedded_samplers : 1;
 
    /**
     * Shared memory types have explicit layout set.  Used for
@@ -485,17 +508,6 @@ typedef struct shader_info {
 
          /** gl_FragDepth layout for ARB_conservative_depth. */
          enum gl_frag_depth_layout depth_layout:3;
-
-         /**
-          * Interpolation qualifiers for drivers that lowers color inputs
-          * to system values.
-          */
-         unsigned color0_interp:3; /* glsl_interp_mode */
-         bool color0_sample:1;
-         bool color0_centroid:1;
-         unsigned color1_interp:3; /* glsl_interp_mode */
-         bool color1_sample:1;
-         bool color1_centroid:1;
 
          /* Bitmask of gl_advanced_blend_mode values that may be used with this
           * shader.

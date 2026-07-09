@@ -587,6 +587,16 @@ d3d12_video_encode_supported_slice_structures(const D3D12_VIDEO_ENCODER_CODEC &c
       supportedSliceStructuresBitMask |= PIPE_VIDEO_CAP_SLICE_STRUCTURE_MAX_SLICE_SIZE;
    }
 
+   capDataSubregionLayout.SubregionMode = D3D12_VIDEO_ENCODER_FRAME_SUBREGION_LAYOUT_MODE_AUTO;
+   hr = pD3D12VideoDevice->CheckFeatureSupport(D3D12_FEATURE_VIDEO_ENCODER_FRAME_SUBREGION_LAYOUT_MODE,
+                                                         &capDataSubregionLayout,
+                                                         sizeof(capDataSubregionLayout));
+   if (FAILED(hr)) {
+      debug_printf("CheckFeatureSupport failed with HR %x\n", (unsigned)hr);
+   } else if (capDataSubregionLayout.IsSupported) {
+      supportedSliceStructuresBitMask |= PIPE_VIDEO_CAP_SLICE_STRUCTURE_AUTO;
+   }
+
    return supportedSliceStructuresBitMask;
 }
 
@@ -615,7 +625,7 @@ struct d3d12_encode_support_cap_allocations
 
 static bool
 d3d12_video_encode_support_caps(const D3D12_VIDEO_ENCODER_CODEC &argTargetCodec,
-                                D3D12_VIDEO_ENCODER_PICTURE_RESOLUTION_DESC maxResolution,
+                                const D3D12_VIDEO_ENCODER_PICTURE_RESOLUTION_DESC &maxResolution,
                                 DXGI_FORMAT encodeFormat,
                                 ID3D12VideoDevice3 *pD3D12VideoDevice,
                                 D3D12_VIDEO_ENCODER_CODEC_CONFIGURATION_SUPPORT codecSupport,
@@ -1251,7 +1261,7 @@ get_move_rects_support(D3D12_VIDEO_ENCODER_INPUT_MAP_SESSION_INFO sessionInfo,
    if ((SUCCEEDED(pD3D12VideoDevice->CheckFeatureSupport(D3D12_FEATURE_VIDEO_ENCODER_MOTION_SEARCH, &capMotionVectors, sizeof(capMotionVectors)))) &&
        (capMotionVectors.SupportFlags & D3D12_VIDEO_ENCODER_MOTION_SEARCH_SUPPORT_FLAG_SUPPORTED))
    {
-      move_rects_support.bits.max_motion_hints = std::min(capMotionVectors.MaxMotionHints, 1u << 16u);
+      move_rects_support.bits.max_motion_hints = std::min(capMotionVectors.MaxMotionHints, 0xFFFFu); // max_motion_hints is a 16 bit variable
       move_rects_support.bits.supports_overlapped_rects = (capMotionVectors.SupportFlags & D3D12_VIDEO_ENCODER_MOTION_SEARCH_SUPPORT_FLAG_MULTIPLE_HINTS) ? 1u : 0u;
       move_rects_support.bits.supports_precision_full_pixel = (capMotionVectors.MotionUnitPrecisionSupport & D3D12_VIDEO_ENCODER_FRAME_INPUT_MOTION_UNIT_PRECISION_SUPPORT_FLAG_FULL_PIXEL) ? 1u : 0u;
       move_rects_support.bits.supports_precision_half_pixel = (capMotionVectors.MotionUnitPrecisionSupport & D3D12_VIDEO_ENCODER_FRAME_INPUT_MOTION_UNIT_PRECISION_SUPPORT_FLAG_HALF_PIXEL) ? 1u : 0u;
@@ -1358,9 +1368,11 @@ union pipe_enc_cap_sliced_notifications
 get_sliced_encode_support(D3D12_VIDEO_ENCODER_SUPPORT_FLAGS capEncoderSupportFlags)
 {
    union pipe_enc_cap_sliced_notifications sliced_encode_support = {};
-   sliced_encode_support.bits.supported = ((capEncoderSupportFlags & D3D12_VIDEO_ENCODER_SUPPORT_FLAG_SUBREGION_NOTIFICATION_SINGLE_BUFFER_AVAILABLE) ||
-                                           (capEncoderSupportFlags & D3D12_VIDEO_ENCODER_SUPPORT_FLAG_SUBREGION_NOTIFICATION_ARRAY_OF_BUFFERS_AVAILABLE)) ? 1u : 0u;
-   sliced_encode_support.bits.multiple_buffers_required = (capEncoderSupportFlags & D3D12_VIDEO_ENCODER_SUPPORT_FLAG_SUBREGION_NOTIFICATION_ARRAY_OF_BUFFERS_AVAILABLE) ? 1u : 0u;
+   sliced_encode_support.bits.supported = (((capEncoderSupportFlags & D3D12_VIDEO_ENCODER_SUPPORT_FLAG_SUBREGION_NOTIFICATION_SINGLE_BUFFER_AVAILABLE) != 0) ||
+                                           ((capEncoderSupportFlags & D3D12_VIDEO_ENCODER_SUPPORT_FLAG_SUBREGION_NOTIFICATION_ARRAY_OF_BUFFERS_AVAILABLE) != 0)) ? 1u : 0u;
+   // multiple_buffers_required is only set when single buffer is NOT available but array of buffers IS available
+   sliced_encode_support.bits.multiple_buffers_required = (((capEncoderSupportFlags & D3D12_VIDEO_ENCODER_SUPPORT_FLAG_SUBREGION_NOTIFICATION_SINGLE_BUFFER_AVAILABLE) == 0) &&
+                                                           ((capEncoderSupportFlags & D3D12_VIDEO_ENCODER_SUPPORT_FLAG_SUBREGION_NOTIFICATION_ARRAY_OF_BUFFERS_AVAILABLE) != 0)) ? 1u : 0u;
    return sliced_encode_support;
 }
 
@@ -1922,7 +1934,7 @@ d3d12_has_video_encode_support(struct pipe_screen *pscreen,
                   // DXGI_FORMAT InputFormat;
                   capEncoderSupportData.InputFormat,
                   // D3D12_VIDEO_ENCODER_PICTURE_RESOLUTION_DESC InputResolution;
-                  capEncoderSupportData.pResolutionList[0],
+                  maxRes,
                   // D3D12_VIDEO_ENCODER_CODEC_CONFIGURATION CodecConfiguration;
                   capEncoderSupportData.CodecConfiguration,
                   // D3D12_VIDEO_ENCODER_FRAME_SUBREGION_LAYOUT_MODE SubregionFrameEncoding;

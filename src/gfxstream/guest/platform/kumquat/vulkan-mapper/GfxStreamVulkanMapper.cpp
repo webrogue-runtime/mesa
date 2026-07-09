@@ -42,7 +42,7 @@ std::unique_ptr<GfxStreamVulkanMapper> sVkMapper;
 GfxStreamVulkanMapper::GfxStreamVulkanMapper() {}
 GfxStreamVulkanMapper::~GfxStreamVulkanMapper() {}
 
-uint32_t chooseGfxQueueFamily(vk_uncompacted_dispatch_table* vk, VkPhysicalDevice phys_dev) {
+static uint32_t chooseGfxQueueFamily(vk_uncompacted_dispatch_table* vk, VkPhysicalDevice phys_dev) {
     uint32_t family_idx = UINT32_MAX;
     uint32_t nProps = 0;
 
@@ -210,21 +210,16 @@ GfxStreamVulkanMapper* GfxStreamVulkanMapper::getInstance(std::optional<DeviceId
         // used for end2end tests, we should be good.
         char* driver = os_get_option_dup(VK_DRIVER_FILES);
 
-	// HACK: Need equivalents on Windows
-#if DETECT_OS_LINUX
-        unsetenv(VK_DRIVER_FILES);
-#endif
+        os_unset_option(VK_DRIVER_FILES);
         sVkMapper = std::make_unique<GfxStreamVulkanMapper>();
         if (!sVkMapper->initialize(*deviceIdOpt)) {
             sVkMapper = nullptr;
             return nullptr;
         }
 
-#if DETECT_OS_LINUX
         if (driver) {
-            setenv(VK_DRIVER_FILES, driver, 1);
+            os_set_option(VK_DRIVER_FILES, driver, true);
         }
-#endif
         free(driver);
     }
 

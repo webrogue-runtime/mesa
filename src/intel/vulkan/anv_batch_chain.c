@@ -270,6 +270,9 @@ anv_batch_bo_create(struct anv_cmd_buffer *cmd_buffer,
    if (result != VK_SUCCESS)
       goto fail_bo_alloc;
 
+   ANV_ADDR_BINDING_REPORT_BO_BIND(cmd_buffer->device, &cmd_buffer->vk.base,
+                                   bbo->bo);
+
    *bbo_out = bbo;
 
    return VK_SUCCESS;
@@ -379,6 +382,8 @@ anv_batch_bo_destroy(struct anv_batch_bo *bbo,
                      struct anv_cmd_buffer *cmd_buffer)
 {
    anv_reloc_list_finish(&bbo->relocs);
+   ANV_ADDR_BINDING_REPORT_BO_UNBIND(cmd_buffer->device, &cmd_buffer->vk.base,
+                                     bbo->bo);
    ANV_DMR_BO_FREE(&cmd_buffer->vk.base, bbo->bo);
    anv_bo_pool_free(&cmd_buffer->device->batch_bo_pool, bbo->bo);
    vk_free(&cmd_buffer->vk.pool->alloc, bbo);
@@ -457,7 +462,10 @@ anv_cmd_buffer_surface_base_address(struct anv_cmd_buffer *cmd_buffer)
    struct anv_state *bt_block = u_vector_head(&cmd_buffer->bt_block_states);
    return (struct anv_address) {
       .bo = pool->block_pool.bo,
-      .offset = bt_block->offset - pool->start_offset,
+      .offset = cmd_buffer->device->info->verx10 >= 125 ?
+                ROUND_DOWN_TO(bt_block->offset - pool->start_offset,
+                              BINDING_TABLE_VIEW_SIZE) :
+                (bt_block->offset - pool->start_offset),
    };
 }
 
@@ -573,14 +581,14 @@ anv_cmd_buffer_chain_batch(struct anv_batch *batch, uint32_t size, void *_data)
    if (result != VK_SUCCESS)
       return result;
 
-   batch->allocated_batch_size += alloc_size;
-
    struct anv_batch_bo **seen_bbo = u_vector_add(&cmd_buffer->seen_bbos);
    if (seen_bbo == NULL) {
       anv_batch_bo_destroy(new_bbo, cmd_buffer);
       return vk_error(cmd_buffer, VK_ERROR_OUT_OF_HOST_MEMORY);
    }
    *seen_bbo = new_bbo;
+
+   batch->allocated_batch_size += new_bbo->bo->size;
 
    cmd_buffer_chain_to_batch_bo(cmd_buffer, new_bbo, ANV_CMD_BUFFER_BATCH_MAIN);
 
@@ -601,16 +609,18 @@ anv_cmd_buffer_chain_generation_batch(struct anv_batch *batch, uint32_t size, vo
 
    struct anv_cmd_buffer *cmd_buffer = _data;
    struct anv_batch_bo *new_bbo = NULL;
+   /* Amount of reserved space at the end of the batch to account for the
+    * chaining instruction.
+    */
+   const uint32_t batch_padding = GFX9_MI_BATCH_BUFFER_START_length * 4;
    /* Cap reallocation to chunk. */
    uint32_t alloc_size = MIN2(
-      MAX2(batch->allocated_batch_size, size),
+      MAX2(batch->allocated_batch_size, size + batch_padding),
       ANV_MAX_CMD_BUFFER_BATCH_SIZE);
 
    VkResult result = anv_batch_bo_create(cmd_buffer, alloc_size, &new_bbo);
    if (result != VK_SUCCESS)
       return result;
-
-   batch->allocated_batch_size += alloc_size;
 
    struct anv_batch_bo **seen_bbo = u_vector_add(&cmd_buffer->seen_bbos);
    if (seen_bbo == NULL) {
@@ -619,6 +629,8 @@ anv_cmd_buffer_chain_generation_batch(struct anv_batch *batch, uint32_t size, vo
    }
    *seen_bbo = new_bbo;
 
+   batch->allocated_batch_size += new_bbo->bo->size;
+
    if (!list_is_empty(&cmd_buffer->generation.batch_bos)) {
       cmd_buffer_chain_to_batch_bo(cmd_buffer, new_bbo,
                                    ANV_CMD_BUFFER_BATCH_GENERATION);
@@ -626,7 +638,7 @@ anv_cmd_buffer_chain_generation_batch(struct anv_batch *batch, uint32_t size, vo
 
    list_addtail(&new_bbo->link, &cmd_buffer->generation.batch_bos);
 
-   anv_batch_bo_start(new_bbo, batch, GFX9_MI_BATCH_BUFFER_START_length * 4);
+   anv_batch_bo_start(new_bbo, batch, batch_padding);
 
    return VK_SUCCESS;
 }
@@ -717,15 +729,15 @@ anv_cmd_buffer_alloc_binding_table(struct anv_cmd_buffer *cmd_buffer,
    cmd_buffer->bt_next.map += bt_size;
    cmd_buffer->bt_next.alloc_size -= bt_size;
 
+   struct anv_state *bt_block = u_vector_head(&cmd_buffer->bt_block_states);
    if (cmd_buffer->device->info->verx10 >= 125) {
+      state.offset += bt_block->offset % BINDING_TABLE_VIEW_SIZE;
       /* We're using 3DSTATE_BINDING_TABLE_POOL_ALLOC to change the binding
        * table address independently from surface state base address.  We no
        * longer need any sort of offsetting.
        */
       *state_offset = 0;
    } else {
-      struct anv_state *bt_block = u_vector_head(&cmd_buffer->bt_block_states);
-
       assert(bt_block->offset < 0);
       *state_offset = -bt_block->offset;
    }
@@ -1067,7 +1079,7 @@ anv_cmd_buffer_end_batch_buffer(struct anv_cmd_buffer *cmd_buffer)
        * actual ExecuteCommands implementation.
        */
       const uint32_t length = cmd_buffer->batch.next - cmd_buffer->batch.start;
-      if (!(cmd_buffer->device->physical->instance->debug & ANV_DEBUG_NO_SECONDARY_CALL)) {
+      if (!ANV_DEBUG(NO_SECONDARY_CALL)) {
          cmd_buffer->exec_mode = ANV_CMD_BUFFER_EXEC_MODE_CALL_AND_RETURN;
 
          void *jump_addr =
@@ -1119,19 +1131,15 @@ anv_cmd_buffer_end_batch_buffer(struct anv_cmd_buffer *cmd_buffer)
    cmd_buffer->total_batch_size += batch_bo->length;
 }
 
-static VkResult
-anv_cmd_buffer_add_seen_bbos(struct anv_cmd_buffer *cmd_buffer,
-                             struct list_head *list)
+static void
+anv_cmd_buffer_add_seen_bbos(struct anv_cmd_buffer *primary,
+                             struct anv_cmd_buffer *secondary)
 {
-   list_for_each_entry(struct anv_batch_bo, bbo, list, link) {
-      struct anv_batch_bo **bbo_ptr = u_vector_add(&cmd_buffer->seen_bbos);
-      if (bbo_ptr == NULL)
-         return vk_error(cmd_buffer, VK_ERROR_OUT_OF_HOST_MEMORY);
-
-      *bbo_ptr = bbo;
+   struct anv_batch_bo **bbo;
+   u_vector_foreach(bbo, &secondary->seen_bbos) {
+      struct anv_batch_bo **bbo_ptr = u_vector_add(&primary->seen_bbos);
+      *bbo_ptr = *bbo;
    }
-
-   return VK_SUCCESS;
 }
 
 void
@@ -1160,7 +1168,7 @@ anv_cmd_buffer_add_secondary(struct anv_cmd_buffer *primary,
        */
       anv_batch_bo_link(primary, last_bbo, this_bbo, offset);
 
-      anv_cmd_buffer_add_seen_bbos(primary, &secondary->batch_bos);
+      anv_cmd_buffer_add_seen_bbos(primary, secondary);
       break;
    }
    case ANV_CMD_BUFFER_EXEC_MODE_COPY_AND_CHAIN: {
@@ -1168,10 +1176,20 @@ anv_cmd_buffer_add_secondary(struct anv_cmd_buffer *primary,
       VkResult result = anv_batch_bo_list_clone(&secondary->batch_bos,
                                                 secondary,
                                                 &copy_list);
-      if (result != VK_SUCCESS)
+      if (result != VK_SUCCESS) {
+         anv_batch_set_error(&primary->batch, result);
          return; /* FIXME */
+      }
 
-      anv_cmd_buffer_add_seen_bbos(primary, &copy_list);
+      list_for_each_entry(struct anv_batch_bo, bbo, &copy_list, link) {
+         struct anv_batch_bo **bbo_ptr = u_vector_add(&primary->seen_bbos);
+         if (bbo_ptr == NULL) {
+            anv_batch_set_error(&primary->batch,
+                                VK_ERROR_OUT_OF_HOST_MEMORY);
+            return;
+         }
+         *bbo_ptr = bbo;
+      }
 
       struct anv_batch_bo *first_bbo =
          list_first_entry(&copy_list, struct anv_batch_bo, link);
@@ -1196,7 +1214,7 @@ anv_cmd_buffer_add_secondary(struct anv_cmd_buffer *primary,
          (struct anv_address) { .bo = first_bbo->bo },
          secondary->return_addr);
 
-      anv_cmd_buffer_add_seen_bbos(primary, &secondary->batch_bos);
+      anv_cmd_buffer_add_seen_bbos(primary, secondary);
       break;
    }
    default:
@@ -1331,6 +1349,16 @@ anv_queue_exec_locked(struct anv_queue *queue,
    struct anv_device *device = queue->device;
    VkResult result = VK_SUCCESS;
 
+#if ANV_SUPPORT_RT
+   /* The application could begin resetting command buffers before the
+    * submission thread actually reaches anv_dump_bvh_to_files, so we
+    * have to steal the BVH dump list earlier while we're still certain
+    * the command buffer is in the pending state.
+    */
+   struct list_head bvh_dumps;
+   anv_get_pending_bvh_dumps(&bvh_dumps, cmd_buffer_count, cmd_buffers);
+#endif
+
    /* We only need to synchronize the main & companion command buffers if we
     * have a companion command buffer somewhere in the list of command
     * buffers.
@@ -1356,6 +1384,11 @@ anv_queue_exec_locked(struct anv_queue *queue,
          perf_query_pool,
          perf_query_pass,
          utrace_submit);
+
+#if ANV_SUPPORT_RT
+   anv_dump_bvh_to_files(queue->device, &bvh_dumps);
+#endif
+
    if (result != VK_SUCCESS)
       return result;
 

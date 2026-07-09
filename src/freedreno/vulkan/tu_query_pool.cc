@@ -12,22 +12,32 @@
 
 #include "nir/nir_builder.h"
 #include "util/os_time.h"
-
 #include "vk_acceleration_structure.h"
 #include "vk_util.h"
 
-#include "tu_buffer.h"
 #include "bvh/tu_build_interface.h"
+#include "common/freedreno_gpu_event.h"
+#include "tu_buffer.h"
 #include "tu_cmd_buffer.h"
 #include "tu_cs.h"
 #include "tu_device.h"
 #include "tu_rmv.h"
 
-#include "common/freedreno_gpu_event.h"
-
 #define NSEC_PER_SEC 1000000000ull
 #define WAIT_TIMEOUT 5
-#define STAT_COUNT ((REG_A6XX_RBBM_PIPESTAT_CSINVOCATIONS - REG_A6XX_RBBM_PIPESTAT_IAVERTICES) / 2 + 1)
+#define __COUNTER_REG(CHIP, name) __RBBM_PIPESTAT_ ## name <CHIP>({}).reg
+#define COUNTER_REG(name) __COUNTER_REG(CHIP, name)
+
+/* Note: gen8 changes the order of the pipestat regs, but in either case
+ * they ones we are interested in are consecutive, so for the purposes of
+ * knowning how many values to read we can just use A6XX reg addresses.
+ *
+ * And in both cases, RBBM_PIPESTAT_IAVERTICES is the first one.
+ *
+ * Depending on how/if they shuffle around in the future, we might need
+ * to shift to reading them individually, like gallium does.
+ */
+#define STAT_COUNT ((__COUNTER_REG(A6XX, CSINVOCATIONS) - __COUNTER_REG(A6XX, IAVERTICES)) / 2 + 1)
 
 struct PACKED query_slot {
    uint64_t available;
@@ -239,6 +249,21 @@ perfcntr_index(const struct fd_perfcntr_group *group, uint32_t group_count,
    assert(i < group_count);
 }
 
+static uint32_t
+perfcntr_reserved_counters(const struct fd_perfcntr_group *group)
+{
+   /* Keep raw perf queries off the CP slots reserved by autotune latency optimization.
+    * TODO: We need to do this in a more robust way.
+    */
+   return strcmp(group->name, "CP") == 0 ? 2 : 0;
+}
+
+static uint32_t
+perfcntr_available_counters(const struct fd_perfcntr_group *group)
+{
+   return group->num_counters - MIN2(group->num_counters, perfcntr_reserved_counters(group));
+}
+
 static int
 compare_perfcntr_pass(const void *a, const void *b)
 {
@@ -350,15 +375,26 @@ tu_CreateQueryPool(VkDevice _device,
          perf_query->data[i].cid = cid;
          perf_query->data[i].app_idx = i;
 
+         const struct fd_perfcntr_group *group = &perf_query->perf_group[gid];
+         uint32_t reserved_counters = perfcntr_reserved_counters(group);
+         uint32_t available_counters = perfcntr_available_counters(group);
+
+         if (available_counters == 0) {
+            vk_query_pool_destroy(&device->vk, pAllocator, &pool->vk);
+            return vk_errorf(device, VK_ERROR_FEATURE_NOT_PRESENT, "No raw perf counters available in group %s",
+                             group->name);
+         }
+
          /* When a counter register is over the capacity(num_counters),
           * reset it for next pass.
           */
-         if (regs[gid] < perf_query->perf_group[gid].num_counters) {
-            perf_query->data[i].cntr_reg = regs[gid]++;
+         if (regs[gid] < available_counters) {
+            perf_query->data[i].cntr_reg = reserved_counters + regs[gid]++;
             perf_query->data[i].pass = pass[gid];
          } else {
             perf_query->data[i].pass = ++pass[gid];
-            perf_query->data[i].cntr_reg = regs[gid] = 0;
+            perf_query->data[i].cntr_reg = reserved_counters;
+            regs[gid] = 0;
             regs[gid]++;
          }
       }
@@ -403,9 +439,6 @@ tu_CreateQueryPool(VkDevice _device,
       vk_query_pool_destroy(&device->vk, pAllocator, &pool->vk);
       return result;
    }
-
-   /* Initialize all query statuses to unavailable */
-   memset(pool->bo->map, 0, pool->bo->size);
 
    pool->size = pCreateInfo->queryCount;
    pool->query_stride = slot_size;
@@ -463,35 +496,38 @@ get_result_count(struct tu_query_pool *pool)
    }
 }
 
+template <chip CHIP>
 static uint32_t
 statistics_index(uint32_t *statistics)
 {
    uint32_t stat;
    stat = u_bit_scan(statistics);
 
+#define COUNTER_OFFSET(name) ((COUNTER_REG(name) - COUNTER_REG(IAVERTICES)) / 2)
+
    switch (1 << stat) {
    case VK_QUERY_PIPELINE_STATISTIC_INPUT_ASSEMBLY_VERTICES_BIT:
-      return 0;
+      return COUNTER_OFFSET(IAVERTICES);
    case VK_QUERY_PIPELINE_STATISTIC_INPUT_ASSEMBLY_PRIMITIVES_BIT:
-      return 1;
+      return COUNTER_OFFSET(IAPRIMITIVES);
    case VK_QUERY_PIPELINE_STATISTIC_VERTEX_SHADER_INVOCATIONS_BIT:
-      return 2;
+      return COUNTER_OFFSET(VSINVOCATIONS);
    case VK_QUERY_PIPELINE_STATISTIC_GEOMETRY_SHADER_INVOCATIONS_BIT:
-      return 5;
+      return COUNTER_OFFSET(GSINVOCATIONS);
    case VK_QUERY_PIPELINE_STATISTIC_GEOMETRY_SHADER_PRIMITIVES_BIT:
-      return 6;
+      return COUNTER_OFFSET(GSPRIMITIVES);
    case VK_QUERY_PIPELINE_STATISTIC_CLIPPING_INVOCATIONS_BIT:
-      return 7;
+      return COUNTER_OFFSET(CINVOCATIONS);
    case VK_QUERY_PIPELINE_STATISTIC_CLIPPING_PRIMITIVES_BIT:
-      return 8;
+      return COUNTER_OFFSET(CPRIMITIVES);
    case VK_QUERY_PIPELINE_STATISTIC_FRAGMENT_SHADER_INVOCATIONS_BIT:
-      return 9;
+      return COUNTER_OFFSET(PSINVOCATIONS);
    case VK_QUERY_PIPELINE_STATISTIC_TESSELLATION_CONTROL_SHADER_PATCHES_BIT:
-      return 3;
+      return COUNTER_OFFSET(HSINVOCATIONS);
    case VK_QUERY_PIPELINE_STATISTIC_TESSELLATION_EVALUATION_SHADER_INVOCATIONS_BIT:
-      return 4;
+      return COUNTER_OFFSET(DSINVOCATIONS);
    case VK_QUERY_PIPELINE_STATISTIC_COMPUTE_SHADER_INVOCATIONS_BIT:
-      return 10;
+      return COUNTER_OFFSET(CSINVOCATIONS);
    default:
       return 0;
    }
@@ -524,6 +560,18 @@ is_pipeline_query_with_compute_stage(uint32_t pipeline_statistics)
 {
    return pipeline_statistics &
           VK_QUERY_PIPELINE_STATISTIC_COMPUTE_SHADER_INVOCATIONS_BIT;
+}
+
+template <chip CHIP>
+static inline void
+emit_counter_barrier(struct tu_cs *cs)
+{
+   tu_cs_emit_wfi(cs);
+
+   if (CHIP >= A8XX) {
+      tu_cs_emit_pkt7(cs, CP_BARRIER, 1);
+      tu_cs_emit(cs, 1);
+   }
 }
 
 /* Wait on the the availability status of a query up until a timeout. */
@@ -588,6 +636,7 @@ write_performance_query_value_cpu(char *base,
    }
 }
 
+template <chip CHIP>
 static VkResult
 get_query_pool_results(struct tu_device *device,
                        struct tu_query_pool *pool,
@@ -634,7 +683,7 @@ get_query_pool_results(struct tu_device *device,
             uint64_t *result;
 
             if (pool->vk.query_type == VK_QUERY_TYPE_PIPELINE_STATISTICS) {
-               uint32_t stat_idx = statistics_index(&statistics);
+               uint32_t stat_idx = statistics_index<CHIP>(&statistics);
                result = query_result_addr(pool, query, uint64_t, stat_idx);
             } else if (is_perf_query_raw(pool)) {
                result = query_result_addr(pool, query, struct perfcntr_query_slot, k);
@@ -646,10 +695,7 @@ get_query_pool_results(struct tu_device *device,
             }
 
             if (is_perf_query_raw(pool)) {
-               struct tu_perf_query_raw *perf_query = &pool->perf_query.raw;
-               struct tu_perf_query_raw_data *data = &perf_query->data[k];
-               VkPerformanceCounterStorageKHR storage =
-                  fd_perfcntr_type_to_vk_storage[perf_query->perf_group[data->gid].countables[data->cid].query_type];
+               VkPerformanceCounterStorageKHR storage = VK_PERFORMANCE_COUNTER_STORAGE_UINT64_KHR;
                write_performance_query_value_cpu(result_base, k, storage, result);
             } else if (is_perf_query_derived(pool)) {
                struct tu_perf_query_derived *perf_query = &pool->perf_query.derived;
@@ -703,6 +749,7 @@ get_query_pool_results(struct tu_device *device,
    return result;
 }
 
+template <chip CHIP>
 VKAPI_ATTR VkResult VKAPI_CALL
 tu_GetQueryPoolResults(VkDevice _device,
                        VkQueryPool queryPool,
@@ -731,13 +778,14 @@ tu_GetQueryPoolResults(VkDevice _device,
    case VK_QUERY_TYPE_ACCELERATION_STRUCTURE_SERIALIZATION_SIZE_KHR:
    case VK_QUERY_TYPE_ACCELERATION_STRUCTURE_SERIALIZATION_BOTTOM_LEVEL_POINTERS_KHR:
    case VK_QUERY_TYPE_ACCELERATION_STRUCTURE_SIZE_KHR:
-      return get_query_pool_results(device, pool, firstQuery, queryCount,
-                                    dataSize, pData, stride, flags);
+      return get_query_pool_results<CHIP>(device, pool, firstQuery, queryCount,
+                                          dataSize, pData, stride, flags);
    default:
       assert(!"Invalid query type");
    }
    return VK_SUCCESS;
 }
+TU_GENX(tu_GetQueryPoolResults);
 
 /* Copies a query value from one buffer to another from the GPU. */
 static void
@@ -808,7 +856,7 @@ emit_copy_query_pool_results(struct tu_cmd_buffer *cmdbuf,
          uint64_t result_iova;
 
          if (pool->vk.query_type == VK_QUERY_TYPE_PIPELINE_STATISTICS) {
-            uint32_t stat_idx = statistics_index(&statistics);
+            uint32_t stat_idx = statistics_index<CHIP>(&statistics);
             result_iova = query_result_iova(pool, query, uint64_t, stat_idx);
          } else if (pool->vk.query_type == VK_QUERY_TYPE_PERFORMANCE_QUERY_KHR) {
             result_iova = query_result_iova(pool, query,
@@ -840,7 +888,7 @@ emit_copy_query_pool_results(struct tu_cmd_buffer *cmdbuf,
             tu_cs_emit_pkt7(cs, CP_COND_EXEC, 6);
             tu_cs_emit_qw(cs, available_iova);
             tu_cs_emit_qw(cs, available_iova);
-            tu_cs_emit(cs, CP_COND_EXEC_4_REF(0x2));
+            tu_cs_emit(cs, CP_COND_EXEC_ACTIVE_TIMESTAMP(0x2).reg);
             tu_cs_emit(cs, 6); /* Cond execute the next 6 DWORDS */
 
             /* Start of conditional execution */
@@ -895,6 +943,7 @@ tu_CmdCopyQueryPoolResults(VkCommandBuffer commandBuffer,
 }
 TU_GENX(tu_CmdCopyQueryPoolResults);
 
+template <chip CHIP>
 static void
 emit_reset_query_pool(struct tu_cmd_buffer *cmdbuf,
                       struct tu_query_pool *pool,
@@ -915,7 +964,7 @@ emit_reset_query_pool(struct tu_cmd_buffer *cmdbuf,
          uint64_t result_iova;
 
          if (pool->vk.query_type == VK_QUERY_TYPE_PIPELINE_STATISTICS) {
-            uint32_t stat_idx = statistics_index(&statistics);
+            uint32_t stat_idx = statistics_index<CHIP>(&statistics);
             result_iova = query_result_iova(pool, query, uint64_t, stat_idx);
          } else if (is_perf_query_raw(pool)) {
             result_iova = query_result_iova(pool, query,
@@ -949,6 +998,7 @@ emit_reset_query_pool(struct tu_cmd_buffer *cmdbuf,
 
 }
 
+template <chip CHIP>
 VKAPI_ATTR void VKAPI_CALL
 tu_CmdResetQueryPool(VkCommandBuffer commandBuffer,
                      VkQueryPool queryPool,
@@ -969,12 +1019,13 @@ tu_CmdResetQueryPool(VkCommandBuffer commandBuffer,
    case VK_QUERY_TYPE_ACCELERATION_STRUCTURE_SERIALIZATION_SIZE_KHR:
    case VK_QUERY_TYPE_ACCELERATION_STRUCTURE_SERIALIZATION_BOTTOM_LEVEL_POINTERS_KHR:
    case VK_QUERY_TYPE_ACCELERATION_STRUCTURE_SIZE_KHR:
-      emit_reset_query_pool(cmdbuf, pool, firstQuery, queryCount);
+      emit_reset_query_pool<CHIP>(cmdbuf, pool, firstQuery, queryCount);
       break;
    default:
       assert(!"Invalid query type");
    }
 }
+TU_GENX(tu_CmdResetQueryPool);
 
 VKAPI_ATTR void VKAPI_CALL
 tu_ResetQueryPool(VkDevice device,
@@ -1144,21 +1195,22 @@ emit_begin_stat_query(struct tu_cmd_buffer *cmdbuf,
       tu_emit_event_write<CHIP>(cmdbuf, cs, FD_START_COMPUTE_CTRS);
    }
 
-   tu_cs_emit_wfi(cs);
+   emit_counter_barrier<CHIP>(cs);
 
    tu_cs_emit_pkt7(cs, CP_REG_TO_MEM, 3);
-   tu_cs_emit(cs, CP_REG_TO_MEM_0_REG(REG_A6XX_RBBM_PIPESTAT_IAVERTICES) |
+   tu_cs_emit(cs, CP_REG_TO_MEM_0_REG(COUNTER_REG(IAVERTICES)) |
                   CP_REG_TO_MEM_0_CNT(STAT_COUNT * 2) |
                   CP_REG_TO_MEM_0_64B);
    tu_cs_emit_qw(cs, begin_iova);
 }
 
+template <chip CHIP>
 static void
 emit_perfcntrs_pass_start(bool has_pred_bit, struct tu_cs *cs, uint32_t pass)
 {
    tu_cs_emit_pkt7(cs, CP_REG_TEST, 1);
    tu_cs_emit(cs, A6XX_CP_REG_TEST_0_REG(
-                        REG_A6XX_CP_SCRATCH_REG(PERF_CNTRS_REG)) |
+                        tu_scratch_reg<CHIP>(PERF_CNTRS_REG).reg) |
                   A6XX_CP_REG_TEST_0_BIT(pass) |
                   (has_pred_bit ?
                      A6XX_CP_REG_TEST_0_PRED_BIT(TU_PREDICATE_PERFCNTRS) : 0) |
@@ -1201,7 +1253,7 @@ emit_begin_perf_query_raw(struct tu_cmd_buffer *cmdbuf,
     *     stream below CP_COND_REG_EXEC.
     */
 
-   tu_cs_emit_wfi(cs);
+   emit_counter_barrier<CHIP>(cs);
 
    /* Keep preemption disabled for the duration of this query. This way
     * changes in perfcounter values should only apply to work done during
@@ -1221,7 +1273,7 @@ emit_begin_perf_query_raw(struct tu_cmd_buffer *cmdbuf,
 
          if (data->pass != 0)
             tu_cond_exec_end(cs);
-         emit_perfcntrs_pass_start(has_pred_bit, cs, data->pass);
+         emit_perfcntrs_pass_start<CHIP>(has_pred_bit, cs, data->pass);
       }
 
       const struct fd_perfcntr_counter *counter =
@@ -1235,7 +1287,7 @@ emit_begin_perf_query_raw(struct tu_cmd_buffer *cmdbuf,
    tu_cond_exec_end(cs);
 
    last_pass = ~0;
-   tu_cs_emit_wfi(cs);
+   emit_counter_barrier<CHIP>(cs);
 
    for (uint32_t i = 0; i < perf_query->counter_index_count; i++) {
       struct tu_perf_query_raw_data *data = &perf_query->data[i];
@@ -1245,7 +1297,7 @@ emit_begin_perf_query_raw(struct tu_cmd_buffer *cmdbuf,
 
          if (data->pass != 0)
             tu_cond_exec_end(cs);
-         emit_perfcntrs_pass_start(has_pred_bit, cs, data->pass);
+         emit_perfcntrs_pass_start<CHIP>(has_pred_bit, cs, data->pass);
       }
 
       const struct fd_perfcntr_counter *counter =
@@ -1270,7 +1322,7 @@ emit_begin_perf_query_derived(struct tu_cmd_buffer *cmdbuf,
    struct tu_cs *cs = cmdbuf->state.pass ? &cmdbuf->draw_cs : &cmdbuf->cs;
    struct tu_perf_query_derived *perf_query = &pool->perf_query.derived;
 
-   tu_cs_emit_wfi(cs);
+   emit_counter_barrier<CHIP>(cs);
 
    /* Keep preemption disabled for the duration of this query. This way
     * changes in perfcounter values should only apply to work done during
@@ -1290,7 +1342,7 @@ emit_begin_perf_query_derived(struct tu_cmd_buffer *cmdbuf,
       tu_cs_emit(cs, countable);
    }
 
-   tu_cs_emit_wfi(cs);
+   emit_counter_barrier<CHIP>(cs);
 
    /* Collect the enabled perfcntrs. Emit CP_ALWAYS_COUNT collection last, if necessary. */
    for (uint32_t i = 0; i < perf_query->collection->num_enabled_perfcntrs; ++i) {
@@ -1327,7 +1379,7 @@ emit_begin_xfb_query(struct tu_cmd_buffer *cmdbuf,
    struct tu_cs *cs = cmdbuf->state.pass ? &cmdbuf->draw_cs : &cmdbuf->cs;
    uint64_t begin_iova = primitive_query_iova(pool, query, begin, 0, 0);
 
-   tu_cs_emit_regs(cs, A6XX_VPC_SO_QUERY_BASE(.qword = begin_iova));
+   tu_cs_emit_regs(cs, VPC_SO_QUERY_BASE(CHIP, .qword = begin_iova));
    tu_emit_event_write<CHIP>(cmdbuf, cs, FD_WRITE_PRIMITIVE_COUNTS);
 
    if (!cmdbuf->state.pass)
@@ -1362,10 +1414,10 @@ emit_begin_prim_generated_query(struct tu_cmd_buffer *cmdbuf,
 
    tu_emit_event_write<CHIP>(cmdbuf, cs, FD_START_PRIMITIVE_CTRS);
 
-   tu_cs_emit_wfi(cs);
+   emit_counter_barrier<CHIP>(cs);
 
    tu_cs_emit_pkt7(cs, CP_REG_TO_MEM, 3);
-   tu_cs_emit(cs, CP_REG_TO_MEM_0_REG(REG_A6XX_RBBM_PIPESTAT_CINVOCATIONS) |
+   tu_cs_emit(cs, CP_REG_TO_MEM_0_REG(COUNTER_REG(CINVOCATIONS)) |
                   CP_REG_TO_MEM_0_CNT(2) |
                   CP_REG_TO_MEM_0_64B);
    tu_cs_emit_qw(cs, begin_iova);
@@ -1518,7 +1570,7 @@ emit_end_occlusion_query(struct tu_cmd_buffer *cmdbuf,
                                        .write_accum_sample_count_diff = true).value);
       tu_cs_emit_qw(cs, begin_iova);
 
-      tu_cs_emit_wfi(cs);
+      emit_counter_barrier<CHIP>(cs);
 
       if (cmdbuf->device->physical_device->info->props.has_generic_clear) {
          /* If the next renderpass uses the same depth attachment, clears it
@@ -1579,7 +1631,7 @@ emit_stop_primitive_ctrs(struct tu_cmd_buffer *cmdbuf,
             tu_cs_emit_pkt7(cs, CP_COND_EXEC, 6);
             tu_cs_emit_qw(cs, global_iova(cmdbuf, vtx_stats_query_not_running));
             tu_cs_emit_qw(cs, global_iova(cmdbuf, vtx_stats_query_not_running));
-            tu_cs_emit(cs, CP_COND_EXEC_4_REF(0x2));
+            tu_cs_emit(cs, CP_COND_EXEC_ACTIVE_TIMESTAMP(0x2).reg);
             tu_cs_emit(cs, 2); /* Cond execute the next 2 DWORDS */
 
             tu_emit_event_write<CHIP>(cmdbuf, cs, FD_STOP_PRIMITIVE_CTRS);
@@ -1630,10 +1682,10 @@ emit_end_stat_query(struct tu_cmd_buffer *cmdbuf,
       tu_emit_event_write<CHIP>(cmdbuf, cs, FD_STOP_COMPUTE_CTRS);
    }
 
-   tu_cs_emit_wfi(cs);
+   emit_counter_barrier<CHIP>(cs);
 
    tu_cs_emit_pkt7(cs, CP_REG_TO_MEM, 3);
-   tu_cs_emit(cs, CP_REG_TO_MEM_0_REG(REG_A6XX_RBBM_PIPESTAT_IAVERTICES) |
+   tu_cs_emit(cs, CP_REG_TO_MEM_0_REG(COUNTER_REG(IAVERTICES)) |
                   CP_REG_TO_MEM_0_CNT(STAT_COUNT * 2) |
                   CP_REG_TO_MEM_0_64B);
    tu_cs_emit_qw(cs, end_iova);
@@ -1684,7 +1736,7 @@ emit_end_perf_query_raw(struct tu_cmd_buffer *cmdbuf,
    /* Wait for the profiled work to finish so that collected counter values
     * are as accurate as possible.
     */
-   tu_cs_emit_wfi(cs);
+   emit_counter_barrier<CHIP>(cs);
 
    for (uint32_t i = 0; i < perf_query->counter_index_count; i++) {
       struct tu_perf_query_raw_data *data = &perf_query->data[i];
@@ -1694,7 +1746,7 @@ emit_end_perf_query_raw(struct tu_cmd_buffer *cmdbuf,
 
          if (data->pass != 0)
             tu_cond_exec_end(cs);
-         emit_perfcntrs_pass_start(has_pred_bit, cs, data->pass);
+         emit_perfcntrs_pass_start<CHIP>(has_pred_bit, cs, data->pass);
       }
 
       const struct fd_perfcntr_counter *counter =
@@ -1710,7 +1762,7 @@ emit_end_perf_query_raw(struct tu_cmd_buffer *cmdbuf,
    tu_cond_exec_end(cs);
 
    last_pass = ~0;
-   tu_cs_emit_wfi(cs);
+   emit_counter_barrier<CHIP>(cs);
 
    for (uint32_t i = 0; i < perf_query->counter_index_count; i++) {
       struct tu_perf_query_raw_data *data = &perf_query->data[i];
@@ -1721,7 +1773,7 @@ emit_end_perf_query_raw(struct tu_cmd_buffer *cmdbuf,
 
          if (data->pass != 0)
             tu_cond_exec_end(cs);
-         emit_perfcntrs_pass_start(has_pred_bit, cs, data->pass);
+         emit_perfcntrs_pass_start<CHIP>(has_pred_bit, cs, data->pass);
       }
 
       result_iova = query_result_iova(pool, query, struct perfcntr_query_slot,
@@ -1775,7 +1827,7 @@ emit_end_perf_query_derived(struct tu_cmd_buffer *cmdbuf,
    /* Wait for the profiled work to finish so that collected counter values
     * are as accurate as possible.
     */
-   tu_cs_emit_wfi(cs);
+   emit_counter_barrier<CHIP>(cs);
 
    /* Collect the enabled perfcntrs. Emit CP_ALWAYS_COUNT collection first, if necessary. */
    if (perf_query->collection->cp_always_count_enabled) {
@@ -1801,7 +1853,7 @@ emit_end_perf_query_derived(struct tu_cmd_buffer *cmdbuf,
       tu_cs_emit_qw(cs, end_iova);
    }
 
-   tu_cs_emit_wfi(cs);
+   emit_counter_barrier<CHIP>(cs);
 
    for (uint32_t i = 0; i < perf_query->collection->num_enabled_perfcntrs; ++i) {
       uint64_t result_iova = perf_query_derived_perfcntr_iova(pool, query, result, i);
@@ -1860,10 +1912,10 @@ emit_end_xfb_query(struct tu_cmd_buffer *cmdbuf,
    if (!cmdbuf->state.pass)
       cmdbuf->state.xfb_query_running_before_rp = false;
 
-   tu_cs_emit_regs(cs, A6XX_VPC_SO_QUERY_BASE(.qword = end_iova));
+   tu_cs_emit_regs(cs, VPC_SO_QUERY_BASE(CHIP, .qword = end_iova));
    tu_emit_event_write<CHIP>(cmdbuf, cs, FD_WRITE_PRIMITIVE_COUNTS);
 
-   tu_cs_emit_wfi(cs);
+   emit_counter_barrier<CHIP>(cs);
    tu_emit_event_write<CHIP>(cmdbuf, cs, FD_CACHE_CLEAN);
 
    /* Set the count of written primitives */
@@ -1915,10 +1967,10 @@ emit_end_prim_generated_query(struct tu_cmd_buffer *cmdbuf,
                              CP_COND_REG_EXEC_0_BINNING);
    }
 
-   tu_cs_emit_wfi(cs);
+   emit_counter_barrier<CHIP>(cs);
 
    tu_cs_emit_pkt7(cs, CP_REG_TO_MEM, 3);
-   tu_cs_emit(cs, CP_REG_TO_MEM_0_REG(REG_A6XX_RBBM_PIPESTAT_CINVOCATIONS) |
+   tu_cs_emit(cs, CP_REG_TO_MEM_0_REG(COUNTER_REG(CINVOCATIONS)) |
                   CP_REG_TO_MEM_0_CNT(2) |
                   CP_REG_TO_MEM_0_64B);
    tu_cs_emit_qw(cs, end_iova);
@@ -2031,6 +2083,7 @@ tu_CmdEndQueryIndexedEXT(VkCommandBuffer commandBuffer,
 }
 TU_GENX(tu_CmdEndQueryIndexedEXT);
 
+template <chip CHIP>
 VKAPI_ATTR void VKAPI_CALL
 tu_CmdWriteTimestamp2(VkCommandBuffer commandBuffer,
                       VkPipelineStageFlagBits2 pipelineStage,
@@ -2063,11 +2116,11 @@ tu_CmdWriteTimestamp2(VkCommandBuffer commandBuffer,
        * there's a better solution that allows all 48 bits of precision
        * because CP_EVENT_WRITE doesn't support 64-bit timestamps.
        */
-      tu_cs_emit_wfi(cs);
+      emit_counter_barrier<CHIP>(cs);
    }
 
    tu_cs_emit_pkt7(cs, CP_REG_TO_MEM, 3);
-   tu_cs_emit(cs, CP_REG_TO_MEM_0_REG(REG_A6XX_CP_ALWAYS_ON_COUNTER) |
+   tu_cs_emit(cs, CP_REG_TO_MEM_0_REG(__CP_ALWAYS_ON_COUNTER<CHIP>({}).reg) |
                   CP_REG_TO_MEM_0_CNT(2) |
                   CP_REG_TO_MEM_0_64B);
    tu_cs_emit_qw(cs, query_result_iova(pool, query, uint64_t, 0));
@@ -2108,6 +2161,7 @@ tu_CmdWriteTimestamp2(VkCommandBuffer commandBuffer,
     */
    handle_multiview_queries(cmd, pool, query);
 }
+TU_GENX(tu_CmdWriteTimestamp2);
 
 VKAPI_ATTR void VKAPI_CALL
 tu_CmdWriteAccelerationStructuresPropertiesKHR(VkCommandBuffer commandBuffer,
@@ -2183,16 +2237,14 @@ tu_EnumeratePhysicalDeviceQueueFamilyPerformanceQueryCountersKHR(
          for (int j = 0; j < group[i].num_countables; j++) {
             vk_outarray_append_typed(VkPerformanceCounterKHR, &out, counter) {
                counter->scope = VK_PERFORMANCE_COUNTER_SCOPE_COMMAND_BUFFER_KHR;
-               counter->unit =
-                     fd_perfcntr_type_to_vk_unit[group[i].countables[j].query_type];
-               counter->storage =
-                     fd_perfcntr_type_to_vk_storage[group[i].countables[j].query_type];
+               counter->unit = VK_PERFORMANCE_COUNTER_UNIT_GENERIC_KHR;
+               counter->storage = VK_PERFORMANCE_COUNTER_STORAGE_UINT64_KHR;
 
-               unsigned char sha1_result[20];
-               _mesa_sha1_compute(group[i].countables[j].name,
+               unsigned char blake3_result[BLAKE3_KEY_LEN];
+               _mesa_blake3_compute(group[i].countables[j].name,
                                   strlen(group[i].countables[j].name),
-                                  sha1_result);
-               memcpy(counter->uuid, sha1_result, sizeof(counter->uuid));
+                                  blake3_result);
+               memcpy(counter->uuid, blake3_result, sizeof(counter->uuid));
             }
 
             vk_outarray_append_typed(VkPerformanceCounterDescriptionKHR, &out_desc, desc) {
@@ -2220,10 +2272,10 @@ tu_EnumeratePhysicalDeviceQueueFamilyPerformanceQueryCountersKHR(
             counter->unit = fd_perfcntr_type_to_vk_unit[derived_counter->type];
             counter->storage = fd_perfcntr_type_to_vk_storage[derived_counter->type];
 
-            unsigned char sha1_result[20];
-            _mesa_sha1_compute(derived_counter->name, strlen(derived_counter->name),
-                               sha1_result);
-            memcpy(counter->uuid, sha1_result, sizeof(counter->uuid));
+            unsigned char blake3_result[BLAKE3_KEY_LEN];
+            _mesa_blake3_compute(derived_counter->name, strlen(derived_counter->name),
+                               blake3_result);
+            memcpy(counter->uuid, blake3_result, sizeof(counter->uuid));
          }
 
          vk_outarray_append_typed(VkPerformanceCounterDescriptionKHR, &out_desc, desc) {
@@ -2265,7 +2317,11 @@ tu_GetPhysicalDeviceQueueFamilyPerformanceQueryPassesKHR(
       }
 
       for (uint32_t i = 0; i < group_count; i++) {
-         n_passes = DIV_ROUND_UP(counters_requested[i], group[i].num_counters);
+         uint32_t available_counters = perfcntr_available_counters(&group[i]);
+         if (available_counters == 0)
+            continue;
+
+         n_passes = DIV_ROUND_UP(counters_requested[i], available_counters);
          *pNumPasses = MAX2(*pNumPasses, n_passes);
       }
    } else {

@@ -39,7 +39,7 @@ static bool si_shader_binary_open(struct si_screen *screen, struct si_shader *sh
 #undef add_part
 
    bool ok = ac_rtld_open(
-      rtld, (struct ac_rtld_open_info){.info = &screen->info,
+      rtld, (struct ac_rtld_open_info){.gfx_level = screen->info.gfx_level,
                                        .options =
                                           {
                                              .halt_at_entry = screen->options.halt_shaders,
@@ -196,7 +196,7 @@ static void post_upload_binary(struct si_screen *sscreen, struct si_shader *shad
       si_cp_dma_copy_buffer(upload_ctx, &shader->bo->b.b, staging, 0, staging_offset,
                             binary_size);
       si_barrier_after_simple_buffer_op(upload_ctx, 0, &shader->bo->b.b, staging);
-      upload_ctx->barrier_flags |= SI_BARRIER_INV_ICACHE | SI_BARRIER_INV_L2;
+      si_set_barrier_flags(upload_ctx, SI_BARRIER_INV_ICACHE | SI_BARRIER_INV_L2);
 
 #if 0 /* debug: validate whether the copy was successful */
       uint32_t *dst_binary = malloc(binary_size);
@@ -399,7 +399,7 @@ static void si_shader_dump_disassembly(struct si_screen *screen,
    struct ac_rtld_binary rtld_binary;
 
    if (!ac_rtld_open(&rtld_binary, (struct ac_rtld_open_info){
-                                      .info = &screen->info,
+                                      .gfx_level = screen->info.gfx_level,
                                       .shader_type = stage,
                                       .wave_size = wave_size,
                                       .num_parts = 1,
@@ -613,7 +613,7 @@ static void si_dump_shader_key(const struct si_shader *shader, FILE *f)
       fprintf(f, "  epilog.alpha_to_one = %u\n", key->ps.part.epilog.alpha_to_one);
       fprintf(f, "  epilog.alpha_to_coverage_via_mrtz = %u\n", key->ps.part.epilog.alpha_to_coverage_via_mrtz);
       fprintf(f, "  epilog.clamp_color = %u\n", key->ps.part.epilog.clamp_color);
-      fprintf(f, "  epilog.dual_src_blend_swizzle = %u\n", key->ps.part.epilog.dual_src_blend_swizzle);
+      fprintf(f, "  epilog.dual_src_blend = %u\n", key->ps.part.epilog.dual_src_blend);
       fprintf(f, "  epilog.rbplus_depth_only_opt = %u\n", key->ps.part.epilog.rbplus_depth_only_opt);
       fprintf(f, "  epilog.kill_z = %u\n", key->ps.part.epilog.kill_z);
       fprintf(f, "  epilog.kill_stencil = %u\n", key->ps.part.epilog.kill_stencil);

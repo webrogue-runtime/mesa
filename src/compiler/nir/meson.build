@@ -41,13 +41,15 @@ nir_opcodes_c = custom_target(
   depend_files : nir_depends,
 )
 
-nir_opt_algebraic_c = custom_target(
-  'nir_opt_algebraic.c',
+nir_opt_algebraic = custom_target(
+  'nir_opt_algebraic',
   input : 'nir_opt_algebraic.py',
-  output : 'nir_opt_algebraic.c',
-  command : [prog_python, '@INPUT@', '--out', '@OUTPUT@'],
+  output : ['nir_opt_algebraic.c'] + (with_tests ? ['nir_opt_algebraic_pattern_test.cpp'] : []),
+  command : [prog_python, '@INPUT@', '--out', '@OUTPUT0@'] +
+            (with_tests ? ['--out-tests', '@OUTPUT1@'] : []),
   depend_files : nir_algebraic_depends,
 )
+nir_opt_algebraic_c = nir_opt_algebraic[0]
 
 nir_intrinsics_h = custom_target(
   'nir_intrinsics.h',
@@ -104,6 +106,7 @@ else
   'nir_builtin_builder.c',
   'nir_builtin_builder.h',
   'nir_conversion_builder.h',
+  'nir_clip_cull_distance_io_utils.c',
   'nir_clone.c',
   'nir_constant_expressions.h',
   'nir_control_flow.c',
@@ -131,7 +134,6 @@ else
   'nir_inline_uniforms.c',
   'nir_instr_set.c',
   'nir_instr_set.h',
-  'nir_io_add_const_offset_to_base.c',
   'nir_io_add_xfb_info.c',
   'nir_legacy.c',
   'nir_legacy.h',
@@ -147,14 +149,12 @@ else
   'nir_lower_atomics_to_ssbo.c',
   'nir_lower_bitmap.c',
   'nir_lower_blend.c',
-  'nir_lower_bool_to_bitsize.c',
   'nir_lower_bool_to_float.c',
   'nir_lower_bool_to_int32.c',
   'nir_lower_calls_to_builtins.c',
   'nir_lower_cl_images.c',
   'nir_lower_clamp_color_outputs.c',
   'nir_lower_clip.c',
-  'nir_lower_clip_cull_distance_array_vars.c',
   'nir_lower_clip_disable.c',
   'nir_lower_clip_halfz.c',
   'nir_lower_const_arrays_to_uniforms.c',
@@ -245,12 +245,14 @@ else
   'nir_lower_bit_size.c',
   'nir_lower_ubo_vec4.c',
   'nir_lower_uniforms_to_ubo.c',
+  'nir_lower_workgroup_size.c',
   'nir_lower_sysvals_to_varyings.c',
   'nir_metadata.c',
   'nir_mod_analysis.c',
   'nir_move_output_stores_to_end.c',
   'nir_move_vec_src_uses_to_dest.c',
   'nir_normalize_cubemap_coords.c',
+  'nir_normalize_sin_cos.c',
   'nir_opt_access.c',
   'nir_opt_barriers.c',
   'nir_opt_barycentric.c',
@@ -266,6 +268,7 @@ else
   'nir_opt_dead_cf.c',
   'nir_opt_dead_write_vars.c',
   'nir_opt_find_array_copies.c',
+  'nir_opt_fp_math_ctrl.c',
   'nir_opt_frag_coord_to_pixel_coord.c',
   'nir_opt_fragdepth.c',
   'nir_opt_gcm.c',
@@ -316,6 +319,7 @@ else
   'nir_range_analysis.h',
   'nir_recompute_io_bases.c',
   'nir_remove_dead_variables.c',
+  'nir_remove_outputs.c',
   'nir_remove_tex_shadow.c',
   'nir_repair_ssa.c',
   'nir_scale_fdiv.c',
@@ -405,50 +409,74 @@ if with_tests
     msvc_bigobj = '/bigobj'
   endif
 
+  # Split the compile of nir_opt_algebraic_pattern_tests into multiple compilation
+  # units, as it takes about of minute of compile time all together.
+  nir_opt_algebraic_pattern_test_cpp = nir_opt_algebraic[1]
+  nir_opt_algebraic_pattern_tests = []
+  foreach i : range(8)
+    nir_opt_algebraic_pattern_tests += static_library(
+      'nir_opt_algebraic_pattern_test_@0@'.format(i),
+      nir_opt_algebraic_pattern_test_cpp,
+      override_options: [msvc_designated_initializer],
+      gnu_symbol_visibility : 'hidden',
+      cpp_args : [cpp_msvc_compat_args, msvc_bigobj, '-DSUBSET=@0@'.format(i)],
+      include_directories : [inc_include, inc_src],
+      dependencies : [dep_thread, idep_gtest, idep_nir, idep_mesautil],
+    )
+  endforeach
+
   test(
     'nir_tests',
     executable(
       'nir_tests',
-      files(
-        'tests/algebraic_tests.cpp',
-        'tests/builder_tests.cpp',
-        'tests/comparison_pre_tests.cpp',
-        'tests/control_flow_tests.cpp',
-        'tests/core_tests.cpp',
-        'tests/dce_tests.cpp',
-        'tests/format_convert_tests.cpp',
-        'tests/load_store_vectorizer_tests.cpp',
-        'tests/loop_analyze_tests.cpp',
-        'tests/loop_unroll_tests.cpp',
-        'tests/lower_alu_width_tests.cpp',
-        'tests/lower_discard_if_tests.cpp',
-        'tests/minimize_call_live_states_test.cpp',
-        'tests/mod_analysis_tests.cpp',
-        'tests/negative_equal_tests.cpp',
-        'tests/opt_if_tests.cpp',
-        'tests/opt_loop_tests.cpp',
-        'tests/opt_peephole_select.cpp',
-        'tests/opt_shrink_vectors_tests.cpp',
-        'tests/opt_varyings_tests_bicm_binary_alu.cpp',
-        'tests/opt_varyings_tests_dead_input.cpp',
-        'tests/opt_varyings_tests_dead_output.cpp',
-        'tests/opt_varyings_tests_dedup.cpp',
-        'tests/opt_varyings_tests_prop_const.cpp',
-        'tests/opt_varyings_tests_prop_ubo.cpp',
-        'tests/opt_varyings_tests_prop_uniform.cpp',
-        'tests/opt_varyings_tests_prop_uniform_expr.cpp',
-        'tests/serialize_tests.cpp',
-        'tests/range_analysis_tests.cpp',
-        'tests/vars_tests.cpp',
-      ),
+      [
+        files(
+          'tests/algebraic_tests.cpp',
+          'tests/builder_tests.cpp',
+          'tests/comparison_pre_tests.cpp',
+          'tests/control_flow_tests.cpp',
+          'tests/core_tests.cpp',
+          'tests/dce_tests.cpp',
+          'tests/format_convert_tests.cpp',
+          'tests/fp_class_tests.cpp',
+          'tests/load_store_vectorizer_tests.cpp',
+          'tests/loop_analyze_tests.cpp',
+          'tests/loop_unroll_tests.cpp',
+          'tests/lower_alu_width_tests.cpp',
+          'tests/lower_discard_if_tests.cpp',
+          'tests/minimize_call_live_states_test.cpp',
+          'tests/mod_analysis_tests.cpp',
+          'tests/negative_equal_tests.cpp',
+          'tests/nir_algebraic_pattern_test.cpp',
+          'tests/opt_if_tests.cpp',
+          'tests/opt_large_constants_tests.cpp',
+          'tests/opt_loop_tests.cpp',
+          'tests/opt_peephole_select.cpp',
+          'tests/opt_shrink_vectors_tests.cpp',
+          'tests/opt_varyings_tests_bicm_binary_alu.cpp',
+          'tests/opt_varyings_tests_bicm_sysval.cpp',
+          'tests/opt_varyings_tests_dead_input.cpp',
+          'tests/opt_varyings_tests_dead_output.cpp',
+          'tests/opt_varyings_tests_dedup.cpp',
+          'tests/opt_varyings_tests_prop_const.cpp',
+          'tests/opt_varyings_tests_prop_ubo.cpp',
+          'tests/opt_varyings_tests_prop_uniform.cpp',
+          'tests/opt_varyings_tests_prop_uniform_expr.cpp',
+          'tests/serialize_tests.cpp',
+          'tests/range_analysis_tests.cpp',
+          'tests/vars_tests.cpp',
+        ),
+      ],
       cpp_args : [cpp_msvc_compat_args, msvc_bigobj],
       override_options: [msvc_designated_initializer],
       gnu_symbol_visibility : 'hidden',
       include_directories : [inc_include, inc_src],
+      link_whole: nir_opt_algebraic_pattern_tests,
       dependencies : [dep_thread, idep_gtest, idep_nir, idep_mesautil],
     ),
     suite : ['compiler', 'nir'],
     protocol : 'gtest',
+    timeout : 120,
   )
 
   test(

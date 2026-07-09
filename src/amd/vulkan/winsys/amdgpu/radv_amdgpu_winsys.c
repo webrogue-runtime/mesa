@@ -11,7 +11,6 @@
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include "drm-uapi/amdgpu_drm.h"
 #include "ac_linux_drm.h"
 #include "ac_surface.h"
@@ -20,7 +19,7 @@
 #include "radv_amdgpu_winsys_public.h"
 #include "radv_debug.h"
 #include "vk_drm_syncobj.h"
-#include "xf86drm.h"
+#include "util/u_memory.h"
 
 static void
 radv_amdgpu_winsys_query_info(struct radeon_winsys *rws, struct radeon_info *gpu_info)
@@ -114,6 +113,34 @@ radv_amdgpu_winsys_query_gpuvm_fault(struct radeon_winsys *rws, struct radv_wins
 static simple_mtx_t winsys_creation_mutex = SIMPLE_MTX_INITIALIZER;
 static struct hash_table *winsyses = NULL;
 
+static VkResult
+radv_amdgpu_null_prt_bug_init(struct radeon_winsys *rws)
+{
+   struct radv_amdgpu_winsys *ws = (struct radv_amdgpu_winsys *)rws;
+
+   if (!ws->info.compiler_info.has_smem_with_null_prt_bug)
+      return VK_SUCCESS;
+
+   /* Create a zero-allocated 8MiB BO that will be used to map partially resident sparse buffers at
+    * creation or when explicitly unmapped.
+    */
+   return ws->base.buffer_create(&ws->base, 8 * 1024 * 1024 /* 8MiB */, 4096, RADEON_DOMAIN_VRAM,
+                                 RADEON_FLAG_NO_CPU_ACCESS | RADEON_FLAG_ZERO_VRAM | RADEON_FLAG_READ_ONLY |
+                                    RADEON_FLAG_NO_INTERPROCESS_SHARING | RADEON_FLAG_PREFER_LOCAL_BO,
+                                 RADV_BO_PRIORITY_VIRTUAL, 0, &ws->null_prt_bug.bo);
+}
+
+static void
+radv_amdgpu_null_prt_bug_finish(struct radeon_winsys *rws)
+{
+   struct radv_amdgpu_winsys *ws = (struct radv_amdgpu_winsys *)rws;
+
+   if (!ws->info.compiler_info.has_smem_with_null_prt_bug)
+      return;
+
+   ws->base.buffer_destroy(&ws->base, ws->null_prt_bug.bo);
+}
+
 static void
 radv_amdgpu_winsys_destroy(struct radeon_winsys *rws)
 {
@@ -143,13 +170,13 @@ radv_amdgpu_winsys_destroy(struct radeon_winsys *rws)
    ac_drm_cs_destroy_syncobj(ws->dev, ws->vm_timeline_syncobj);
    simple_mtx_destroy(&ws->vm_ioctl_lock);
 
-   if (ws->reserve_vmid)
-      ac_drm_vm_unreserve_vmid(ws->dev, 0);
-
    if (ws->bo_history_logfile)
       fclose(ws->bo_history_logfile);
 
    u_rwlock_destroy(&ws->log_bo_list_lock);
+
+   radv_amdgpu_null_prt_bug_finish(rws);
+
    ac_drm_device_deinitialize(ws->dev);
    FREE(rws);
 }
@@ -177,6 +204,20 @@ radv_amdgpu_winsys_get_sync_provider(struct radeon_winsys *rws)
    return p->clone(p);
 }
 
+static int
+radv_amdgpu_winsys_reserve_vmid(struct radeon_winsys *rws)
+{
+   struct radv_amdgpu_winsys *ws = (struct radv_amdgpu_winsys *)rws;
+   return ac_drm_vm_reserve_vmid(ws->dev, 0);
+}
+
+static void
+radv_amdgpu_winsys_unreserve_vmid(struct radeon_winsys *rws)
+{
+   struct radv_amdgpu_winsys *ws = (struct radv_amdgpu_winsys *)rws;
+   ac_drm_vm_unreserve_vmid(ws->dev, 0);
+}
+
 static uint64_t
 radv_amdgpu_winsys_filter_perftest_flags(uint64_t perftest_flags)
 {
@@ -185,7 +226,7 @@ radv_amdgpu_winsys_filter_perftest_flags(uint64_t perftest_flags)
 }
 
 VkResult
-radv_amdgpu_winsys_create(int fd, uint64_t debug_flags, uint64_t perftest_flags, bool reserve_vmid, bool is_virtio,
+radv_amdgpu_winsys_create(int fd, uint64_t debug_flags, uint64_t perftest_flags, bool is_virtio,
                           struct radeon_winsys **winsys)
 {
    VkResult result = VK_SUCCESS;
@@ -231,7 +272,8 @@ radv_amdgpu_winsys_create(int fd, uint64_t debug_flags, uint64_t perftest_flags,
       /* Check that options don't differ from the existing winsys. */
       if (((debug_flags & RADV_DEBUG_ALL_BOS) && !ws->debug_all_bos) ||
           ((debug_flags & RADV_DEBUG_HANG) && !ws->debug_log_bos) ||
-          ((debug_flags & RADV_DEBUG_NO_IB_CHAINING) && ws->chain_ib) || (perftest_flags != ws->perftest)) {
+          ((debug_flags & RADV_DEBUG_NO_IB_CHAINING) && ws->chain_ib) ||
+          ((debug_flags & RADV_DEBUG_VM) && !ws->debug_vm) || (perftest_flags != ws->perftest)) {
          fprintf(stderr, "radv/amdgpu: Found options that differ from the existing winsys.\n");
          return VK_ERROR_INITIALIZATION_FAILED;
       }
@@ -289,15 +331,6 @@ radv_amdgpu_winsys_create(int fd, uint64_t debug_flags, uint64_t perftest_flags,
          fprintf(stderr, "radv/amdgpu: Failed to create /tmp/radv_bo_history.log.\n");
    }
 
-   ws->reserve_vmid = reserve_vmid;
-   if (ws->reserve_vmid) {
-      r = ac_drm_vm_reserve_vmid(ws->dev, 0);
-      if (r) {
-         fprintf(stderr, "radv/amdgpu: failed to reserve vmid.\n");
-         result = VK_ERROR_INITIALIZATION_FAILED;
-         goto winsys_fail;
-      }
-   }
    int num_sync_types = 0;
 
    ws->syncobj_sync_type = vk_drm_syncobj_get_type_from_provider(ac_drm_device_get_sync_provider(dev));
@@ -326,6 +359,7 @@ radv_amdgpu_winsys_create(int fd, uint64_t debug_flags, uint64_t perftest_flags,
 
    ws->perftest = perftest_flags;
    ws->zero_all_vram_allocs = debug_flags & RADV_DEBUG_ZERO_VRAM;
+   ws->debug_vm = debug_flags & RADV_DEBUG_VM;
    u_rwlock_init(&ws->global_bo_list.lock);
    list_inithead(&ws->log_bo_list);
    u_rwlock_init(&ws->log_bo_list_lock);
@@ -338,8 +372,14 @@ radv_amdgpu_winsys_create(int fd, uint64_t debug_flags, uint64_t perftest_flags,
    ws->base.get_sync_types = radv_amdgpu_winsys_get_sync_types;
    ws->base.get_sync_provider = radv_amdgpu_winsys_get_sync_provider;
    ws->base.copy_sync_payloads = vk_drm_syncobj_copy_payloads;
+   ws->base.reserve_vmid = radv_amdgpu_winsys_reserve_vmid;
+   ws->base.unreserve_vmid = radv_amdgpu_winsys_unreserve_vmid;
    radv_amdgpu_bo_init_functions(ws);
    radv_amdgpu_cs_init_functions(ws);
+
+   result = radv_amdgpu_null_prt_bug_init(&ws->base);
+   if (result != VK_SUCCESS)
+      goto winsys_fail;
 
    _mesa_hash_table_insert(winsyses, (void *)ac_drm_device_get_cookie(dev), ws);
    simple_mtx_unlock(&winsys_creation_mutex);

@@ -59,7 +59,7 @@ TEST_F(nir_opt_varyings_test_prop_const, \
    SHADER_CONST_OUTPUT(producer_stage, consumer_stage, slot, comp, type, bitsize, value, value) \
    \
    if (nir_slot_is_sysval_output((gl_varying_slot)pindex, MESA_SHADER_##consumer_stage)) { \
-      ASSERT_TRUE(opt_varyings() == nir_progress_consumer); \
+      ASSERT_TRUE(opt_varyings() & nir_progress_consumer); \
       ASSERT_TRUE(b1->shader->info.outputs_written == BITFIELD64_BIT(pindex)); \
       ASSERT_TRUE(nir_intrinsic_io_semantics(store).no_varying); \
    } else { \
@@ -91,20 +91,12 @@ TEST_F(nir_opt_varyings_test_prop_const, \
    \
    nir_io_xfb xfb; \
    memset(&xfb, 0, sizeof(xfb)); \
-   xfb.out[comp % 2].num_components = 1; \
-   if (comp <= 1) { \
-      nir_intrinsic_set_io_xfb(store, xfb); \
-      if (store2) \
-         nir_intrinsic_set_io_xfb(store2, xfb); \
-      if (store3) \
-         nir_intrinsic_set_io_xfb(store3, xfb); \
-   } else { \
-      nir_intrinsic_set_io_xfb2(store, xfb); \
-      if (store2) \
-         nir_intrinsic_set_io_xfb2(store2, xfb); \
-      if (store3) \
-         nir_intrinsic_set_io_xfb2(store3, xfb); \
-   } \
+   xfb.out[comp].num_components = 1; \
+   nir_intrinsic_set_io_xfb(store, xfb); \
+   if (store2) \
+      nir_intrinsic_set_io_xfb(store2, xfb); \
+   if (store3) \
+      nir_intrinsic_set_io_xfb(store3, xfb); \
    \
    ASSERT_TRUE(opt_varyings() == nir_progress_consumer); \
    ASSERT_TRUE(b1->shader->info.outputs_written == BITFIELD64_BIT(pindex)); \

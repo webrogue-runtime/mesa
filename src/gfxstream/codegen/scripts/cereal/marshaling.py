@@ -142,7 +142,7 @@ class VulkanMarshalingCodegen(VulkanTypeIterator):
         else:
             self.genStreamCall(handle64VarType, handle64VarAccess, handle64Bytes)
             if lenAccess != "1" and vulkanType.typeName == "VkImage":
-                self.cgen.stmt("for(int i = 0; i<%s; i++) { %s[i] = new_from_host_u64_VkImage(%s[i]); }" % (lenAccess, access, handle64VarAccess))
+                self.cgen.stmt("for(int i = 0; i<%s; i++) { ((%s*) %s)[i] = new_from_host_u64_%s(%s[i]); }" % (lenAccess, vulkanType.typeName, access, vulkanType.typeName, handle64VarAccess))
             else:
                 self.cgen.stmt(
                     "%s->handleMapping()->mapHandles_u64_%s(%s, %s%s, %s)" %
@@ -459,7 +459,7 @@ class VulkanMarshalingCodegen(VulkanTypeIterator):
 
         if self.direction == "write":
             self.cgen.stmt("saveStringArray(%s, %s, %s)" % (self.streamVarName,
-                                                            access, lenAccess))
+                                                            access, lenAccess if lenAccess is not None else "0"))
         else:
             castExpr = \
                 self.makeCastExpr( \
@@ -471,8 +471,9 @@ class VulkanMarshalingCodegen(VulkanTypeIterator):
     def onStaticArr(self, vulkanType):
         access = self.exprValueAccessor(vulkanType)
         lenAccess = self.lenAccessor(vulkanType)
-        finalLenExpr = "%s * %s" % (lenAccess, self.cgen.sizeofExpr(vulkanType))
-        self.genStreamCall(vulkanType, access, finalLenExpr)
+        if lenAccess is not None:
+            finalLenExpr = "%s * %s" % (lenAccess, self.cgen.sizeofExpr(vulkanType))
+            self.genStreamCall(vulkanType, access, finalLenExpr)
 
     # Old version VkEncoder may have some sType values conflict with VkDecoder
     # of new versions. For host decoder, it should not carry the incorrect old

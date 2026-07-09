@@ -1,10 +1,9 @@
 /*
  * Copyright © 2024 Collabora Ltd.
- *
  * SPDX-License-Identifier: MIT
  */
 
-#include "bifrost_compile.h"
+#include "bifrost/bifrost_compile.h"
 #include "pan_desc.h"
 #include "pan_encoder.h"
 #include "panvk_cmd_alloc.h"
@@ -21,7 +20,7 @@ panvk_per_arch(dispatch_precomp)(struct panvk_precomp_ctx *ctx,
                                  enum libpan_shaders_program idx, void *data,
                                  size_t data_size)
 {
-   enum panlib_barrier supported_barriers =
+   ASSERTED enum panlib_barrier supported_barriers =
       PANLIB_BARRIER_JM_BARRIER | PANLIB_BARRIER_JM_SUPPRESS_PREFETCH;
    assert(!(barrier & ~supported_barriers) && "Unsupported barrier flags");
 

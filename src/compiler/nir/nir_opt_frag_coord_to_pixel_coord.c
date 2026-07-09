@@ -15,7 +15,8 @@
 static bool
 opt_frag_pos(nir_builder *b, nir_intrinsic_instr *intr, UNUSED void *data)
 {
-   if (intr->intrinsic != nir_intrinsic_load_frag_coord)
+   if (intr->intrinsic != nir_intrinsic_load_frag_coord &&
+       intr->intrinsic != nir_intrinsic_load_frag_coord_xy)
       return false;
 
    /* Don't increase precision. */
@@ -27,14 +28,16 @@ opt_frag_pos(nir_builder *b, nir_intrinsic_instr *intr, UNUSED void *data)
       if (nir_src_is_if(use))
          return false;
 
-      unsigned mask = nir_src_components_read(use);
+      if (intr->intrinsic == nir_intrinsic_load_frag_coord) {
+         unsigned mask = nir_src_components_read(use);
 
-      if (!(mask & 0x3))
-         continue;
+         if (!(mask & 0x3))
+            continue;
 
-      /* Don't handle instructions that read x/y and z/w for simplicity. */
-      if (mask & ~0x3)
-         return false;
+         /* Don't handle instructions that read x/y and z/w for simplicity. */
+         if (mask & ~0x3)
+            return false;
+      }
 
       nir_instr *use_instr = nir_src_parent_instr(use);
 
@@ -62,10 +65,12 @@ opt_frag_pos(nir_builder *b, nir_intrinsic_instr *intr, UNUSED void *data)
    nir_def *pixel_coord = nir_load_pixel_coord(b);
 
    nir_foreach_use_safe(use, &intr->def) {
-      unsigned mask = nir_src_components_read(use);
+      if (intr->intrinsic == nir_intrinsic_load_frag_coord) {
+         unsigned mask = nir_src_components_read(use);
 
-      if (!(mask & 0x3))
-         continue;
+         if (!(mask & 0x3))
+            continue;
+      }
 
       nir_src_rewrite(use, pixel_coord);
 
@@ -75,6 +80,7 @@ opt_frag_pos(nir_builder *b, nir_intrinsic_instr *intr, UNUSED void *data)
       bool needs_float = use_instr->op == nir_op_ffloor || use_instr->op == nir_op_ftrunc;
       nir_alu_type dst_type = (needs_float ? nir_type_float : nir_type_uint) | use_instr->def.bit_size;
       use_instr->op = nir_type_conversion_op(nir_type_uint16, dst_type, nir_rounding_mode_undef);
+      use_instr->fp_math_ctrl = nir_op_valid_fp_math_ctrl(use_instr->op, use_instr->fp_math_ctrl);
    }
 
    return true;

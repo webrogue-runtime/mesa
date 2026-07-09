@@ -49,10 +49,44 @@ that code change came from, whether they wrote it themselves, used an
 includes making sure that the code change can be submitted under the
 MIT license that Mesa uses.
 
+This extends through the use of the tool you are using to submit your
+contributions. It is not allowed to use autonomously acting tools to
+submit any contributions, that is every contributions needs explicit
+oversight and your review. This includes interactions with GitLab issues
+or MRs in any autonomous way through such tools. It will be decided by the
+community and maintainers which and how such tooling will be used within
+the Mesa project and might be made available for other contributors to use
+through our GitLab instance. Do not under any circumstances wire up any
+review bot or similar tools.
+
 The submitter needs to understand what code they are changing,
 what the change does, and justify that change in the commit messages.
 Using coding assistants or "AI" or other tools does not grant additional
 privileges or reduce our expectations.
+
+Disclosure is always required when "AI" was involved in the creative
+process of coming up with the code, except in the following cases:
+
+-  Trivial or small changes that wouldn't be copyrightable regardless of
+   "AI" involvement. For example something like a "min" function fit this
+   category.
+-  Mechanical changes where the expected result is obvious and not up to
+   interpretation, ie. when it would be the same regardless of what
+   tooling was used. For example, autocomplete, refactoring the name of a
+   variable and similar activities fit this category. In these cases it is
+   still recommended (but not required) to disclose the tool used,
+   eg. "AI", "sed", "cocinelle", etc. in order to ease the review process.
+
+We suggest the following scheme to disclose the level "AI" tooling was
+involved:
+
+-  ``Assisted-by: TOOL (OPTIONAL: MODEL)`` for when "AI" was involved in making
+   decisions or also generated parts of the code.
+-  ``Generated-by: TOOL (OPTIONAL: MODEL)`` for when almost all the code was
+   generated through "AI".
+
+Do not use the ``Co-authored-by`` tag as this one is reserved for human
+co-authors.
 
 If you don't know programming (and don't want to learn), but you are
 interested in the Mesa project, there are plenty of other ways to
@@ -197,6 +231,9 @@ following example::
 This will backport the commit to the 21.0 branch, as well as any more recent
 stable branch. Multiple ``Backport-to:`` lines are allowed, but only the
 lowest number mentioned actually matters, so for clarity, please only use one.
+You can also use the special ``Backport-to: *`` which will nominate the commit
+to be backported to every active stable branch, making it a synonym to the ``Cc:
+mesa-stable`` below.
 
 The last option is deprecated and mostly here for historical reasons
 dating back to when patch submission was done via emails: using a ``Cc:``

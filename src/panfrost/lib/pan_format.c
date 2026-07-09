@@ -1,27 +1,6 @@
 /*
  * Copyright (C) 2019 Collabora, Ltd.
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- *
- * Authors:
- *   Alyssa Rosenzweig <alyssa.rosenzweig@collabora.com>
+ * SPDX-License-Identifier: MIT
  */
 
 #include "pan_format.h"
@@ -51,6 +30,11 @@
 #define MALI_BLEND_AU_R5G5B5A1    (MALI_RGB5_A1_AU << 12)  | MALI_RGBA_SWIZZLE
 #define MALI_BLEND_PU_R5G5B5A1    (MALI_RGB5_A1_PU << 12)  | MALI_RGBA_SWIZZLE
 
+#define MALI_BLEND_R16F        (MALI_R16F << 12)           | MALI_RGBA_SWIZZLE
+#define MALI_BLEND_RG16F       (MALI_RG16F << 12)          | MALI_RGBA_SWIZZLE
+#define MALI_BLEND_RGBA16F     (MALI_RGBA16F << 12)        | MALI_RGBA_SWIZZLE
+#define MALI_BLEND_RG11F_B10F  (MALI_R11F_G11F_B10F << 12) | MALI_RGBA_SWIZZLE
+
 #if PAN_ARCH <= 5
 #define BFMT2(pipe, internal, writeback, srgb)                                 \
    [PIPE_FORMAT_##pipe] = {                                                    \
@@ -77,6 +61,18 @@
    BFMT2(pipe##_UNORM, R8G8B8A8, writeback, 0),                                \
       BFMT2(pipe##_SRGB, R8G8B8A8, writeback, 1)
 
+#if PAN_ARCH >= 9
+#define BFMT_FLOAT(pipe, internal_and_writeback)                               \
+   [PIPE_FORMAT_##pipe] = {                                                    \
+      MALI_COLOR_BUFFER_INTERNAL_FORMAT_##internal_and_writeback,              \
+      MALI_FLOAT_COLOR_FORMAT_##internal_and_writeback,                        \
+      {                                                                        \
+         MALI_BLEND_##internal_and_writeback,                                  \
+         MALI_BLEND_##internal_and_writeback,                                  \
+      },                                                                       \
+   }
+#endif
+
 const struct pan_blendable_format
    GENX(pan_blendable_formats)[PIPE_FORMAT_COUNT] = {
       BFMT_SRGB(L8, R8),
@@ -96,7 +92,9 @@ const struct pan_blendable_format
       BFMT_SRGB(R8G8B8A8, R8G8B8A8),
 
       BFMT2(A8_UNORM, R8G8B8A8, R8, 0),
+#if PAN_ARCH < 6
       BFMT2(I8_UNORM, R8G8B8A8, R8, 0),
+#endif
       BFMT2(R5G6B5_UNORM, R5G6B5A0, R5G6B5, 0),
       BFMT2(B5G6R5_UNORM, R5G6B5A0, R5G6B5, 0),
 
@@ -113,6 +111,13 @@ const struct pan_blendable_format
       BFMT(B5G5R5A1_UNORM, R5G5B5A1),
       BFMT(R5G5B5A1_UNORM, R5G5B5A1),
       BFMT(B5G5R5X1_UNORM, R5G5B5A1),
+
+#if PAN_ARCH >= 9
+      BFMT_FLOAT(R16_FLOAT, R16F),
+      BFMT_FLOAT(R16G16_FLOAT, RG16F),
+      BFMT_FLOAT(R16G16B16A16_FLOAT, RGBA16F),
+      BFMT_FLOAT(R11G11B10_FLOAT, RG11F_B10F),
+#endif
 };
 
 /* Convenience */
@@ -160,7 +165,7 @@ const struct pan_blendable_format
 #define FMTC(pipe, texfeat, interchange, swizzle, srgb)                        \
    [PIPE_FORMAT_##pipe] = {                                                    \
       .hw = MALI_PACK_FMT(texfeat, swizzle, srgb),                             \
-      .bind = (PAN_BIND_SAMPLER_VIEW | PAN_BIND_STORAGE_IMAGE),                \
+      .bind = (PAN_BIND_SAMPLER_VIEW),                                         \
       .texfeat_bit = MALI_##texfeat,                                           \
    }
 #else
@@ -170,7 +175,7 @@ const struct pan_blendable_format
 #define FMTC(pipe, texfeat, interchange, swizzle, srgb)                        \
    [PIPE_FORMAT_##pipe] = {                                                    \
       .hw = MALI_PACK_FMT(interchange, swizzle, srgb),                         \
-      .bind = (PAN_BIND_SAMPLER_VIEW | PAN_BIND_STORAGE_IMAGE),                \
+      .bind = (PAN_BIND_SAMPLER_VIEW),                                         \
       .texfeat_bit = MALI_##texfeat,                                           \
    }
 #endif
@@ -410,17 +415,13 @@ const struct pan_format GENX(pan_pipe_format)[PIPE_FORMAT_COUNT] = {
    FMT(R16G16_UINT,             RG16UI,          RG01, L, VTR_IB),
    FMT(R32G32_UINT,             RG32UI,          RG01, L, VTR_IB),
    FMT(R8G8B8_UINT,             RGB8UI,          RGB1, L, V_____),
-   /* TODO: enable storage after CTS bug fix is merged:
-    * https://gitlab.khronos.org/Tracker/vk-gl-cts/-/issues/5700 */
-   FMT(R32G32B32_UINT,          RGB32UI,         RGB1, L, VTR___),
+   FMT(R32G32B32_UINT,          RGB32UI,         RGB1, L, VTR_IB),
    FMT(R8G8B8A8_UINT,           RGBA8UI,         RGBA, L, VTR_IB),
    FMT(R16G16B16A16_UINT,       RGBA16UI,        RGBA, L, VTR_IB),
    FMT(R32G32B32A32_UINT,       RGBA32UI,        RGBA, L, VTR_IB),
    FMT(R32_FLOAT,               R32F,            R001, L, VTR_IB),
    FMT(R32G32_FLOAT,            RG32F,           RG01, L, VTR_IB),
-   /* TODO: enable storage after CTS bug fix is merged:
-    * https://gitlab.khronos.org/Tracker/vk-gl-cts/-/issues/5700 */
-   FMT(R32G32B32_FLOAT,         RGB32F,          RGB1, L, VTR___),
+   FMT(R32G32B32_FLOAT,         RGB32F,          RGB1, L, VTR_IB),
    FMT(R32G32B32A32_FLOAT,      RGBA32F,         RGBA, L, VTR_IB),
    FMT(R8_UNORM,                R8_UNORM,        R001, L, VTR_IB),
    FMT(R16_UNORM,               R16_UNORM,       R001, L, VTR_IB),
@@ -465,6 +466,9 @@ const struct pan_format GENX(pan_pipe_format)[PIPE_FORMAT_COUNT] = {
    FMT(A4R4G4B4_UNORM,          RGBA4_UNORM,     ARGB, L, VTR___),
    FMT(A4B4G4R4_UNORM,          RGBA4_UNORM,     ABGR, L, VTR___),
    FMT(R16G16B16A16_UNORM,      RGBA16_UNORM,    RGBA, L, VTR_IB),
+#if PAN_ARCH >= 11
+   FMT(X6R10X6G10X6B10X6A10_UNORM, R10X6G10X6B10X6A10X6_UNORM, RGBA, L, _T____),
+#endif
    FMT(B8G8R8A8_UNORM,          RGBA8_UNORM,     BGRA, L, VTR_IB),
    FMT(B8G8R8X8_UNORM,          RGBA8_UNORM,     BGR1, L, VTR_IB),
    FMT(A8R8G8B8_UNORM,          RGBA8_UNORM,     GBAR, L, VTR_IB),
@@ -508,9 +512,7 @@ const struct pan_format GENX(pan_pipe_format)[PIPE_FORMAT_COUNT] = {
    FMT(R32G32_SINT,             RG32I,           RG01, L, VTR_IB),
    FMT(R16G16_FLOAT,            RG16F,           RG01, L, VTR_IB),
    FMT(R8G8B8_SINT,             RGB8I,           RGB1, L, V_____),
-   /* TODO: enable storage after CTS bug fix is merged:
-    * https://gitlab.khronos.org/Tracker/vk-gl-cts/-/issues/5700 */
-   FMT(R32G32B32_SINT,          RGB32I,          RGB1, L, VTR___),
+   FMT(R32G32B32_SINT,          RGB32I,          RGB1, L, VTR_IB),
    FMT(R8G8B8A8_SINT,           RGBA8I,          RGBA, L, VTR_IB),
    FMT(R16G16B16A16_SINT,       RGBA16I,         RGBA, L, VTR_IB),
    FMT(R32G32B32A32_SINT,       RGBA32I,         RGBA, L, VTR_IB),

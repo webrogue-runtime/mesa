@@ -8,6 +8,7 @@
 #include "si_query.h"
 #include "util/u_memory.h"
 
+#include "ac_cmdbuf_cp.h"
 #include "ac_perfcounter.h"
 
 struct si_query_group {
@@ -61,7 +62,7 @@ static void si_pc_wait_idle(struct si_context *sctx)
    radeon_emit(EVENT_TYPE(V_028A90_CS_PARTIAL_FLUSH | EVENT_INDEX(4)));
    radeon_end();
 
-   si_cp_acquire_mem(sctx, cs, coher_cntl_stall_all, V_580_CP_PFP);
+   si_cp_acquire_mem(sctx, cs, coher_cntl_stall_all, V_581A_PREFETCH_PARSER);
 }
 
 static void si_pc_emit_instance(struct si_context *sctx, int se, int instance)
@@ -120,7 +121,7 @@ static void si_pc_emit_select(struct si_context *sctx, struct ac_pc_block *block
       radeon_emit(selectors[idx] | regs->select_or);
    }
 
-   for (idx = 0; idx < regs->num_spm_counters; idx++) {
+   for (idx = 0; idx < regs->num_spm_modules; idx++) {
       radeon_set_uconfig_reg_seq(regs->select1[idx], 1);
       radeon_emit(0);
    }
@@ -298,7 +299,7 @@ static void si_pc_query_suspend(struct si_context *sctx, struct si_query *squery
             si_pc_emit_instance(sctx, se, instance);
             si_pc_emit_read(sctx, block, group->num_counters, va);
             va += sizeof(uint64_t) * group->num_counters;
-         } while (group->instance < 0 && ++instance < block->num_instances);
+         } while (group->instance < 0 && ++instance < block->num_scoped_instances);
       } while (++se < se_end);
    }
 
@@ -408,7 +409,7 @@ static struct si_query_group *get_group_state(struct si_screen *screen, struct s
    group->sub_gid = sub_gid;
 
    if (block->b->b->flags & AC_PC_BLOCK_SHADER) {
-      unsigned sub_gids = block->num_instances;
+      unsigned sub_gids = block->num_scoped_instances;
       unsigned shader_id;
       unsigned shaders;
       unsigned query_shaders;
@@ -436,8 +437,8 @@ static struct si_query_group *get_group_state(struct si_screen *screen, struct s
    }
 
    if (ac_pc_block_has_per_se_groups(&pc->base, block)) {
-      group->se = sub_gid / block->num_instances;
-      sub_gid = sub_gid % block->num_instances;
+      group->se = sub_gid / block->num_scoped_instances;
+      sub_gid = sub_gid % block->num_scoped_instances;
    } else {
       group->se = -1;
    }
@@ -516,7 +517,7 @@ struct pipe_query *si_create_batch_query(struct pipe_context *ctx, unsigned num_
       if ((block->b->b->flags & AC_PC_BLOCK_SE) && group->se < 0)
          instances = screen->info.max_se;
       if (group->instance < 0)
-         instances *= block->num_instances;
+         instances *= block->num_scoped_instances;
 
       group->result_base = i;
       query->result_size += sizeof(uint64_t) * instances * group->num_counters;
@@ -559,7 +560,7 @@ struct pipe_query *si_create_batch_query(struct pipe_context *ctx, unsigned num_
       if ((block->b->b->flags & AC_PC_BLOCK_SE) && group->se < 0)
          counter->qwords = screen->info.max_se;
       if (group->instance < 0)
-         counter->qwords *= block->num_instances;
+         counter->qwords *= block->num_scoped_instances;
    }
 
    return (struct pipe_query *)query;
@@ -670,17 +671,13 @@ void si_init_perfcounters(struct si_screen *screen)
 static bool
 si_spm_init_bo(struct si_context *sctx)
 {
-   struct radeon_winsys *ws = sctx->ws;
    uint64_t size = 32 * 1024 * 1024; /* Default to 32MB. */
 
    sctx->spm.buffer_size = size;
 
-   sctx->spm.bo = ws->buffer_create(
-      ws, size, 4096,
-      RADEON_DOMAIN_GTT,
-      RADEON_FLAG_NO_INTERPROCESS_SHARING |
-         RADEON_FLAG_GTT_WC |
-         RADEON_FLAG_NO_SUBALLOC);
+   sctx->spm.bo =
+      pipe_aligned_buffer_create(&sctx->screen->b, SI_RESOURCE_FLAG_DRIVER_INTERNAL,
+                                 PIPE_USAGE_DEFAULT, size, 4096);
 
    return sctx->spm.bo != NULL;
 }
@@ -690,7 +687,7 @@ si_emit_spm_setup(struct si_context *sctx, struct radeon_cmdbuf *cs)
 {
    const enum amd_ip_type ip_type = sctx->ws->cs_get_ip_type(cs);
    struct ac_spm *spm = &sctx->spm;
-   uint64_t va = sctx->screen->ws->buffer_get_virtual_address(spm->bo);
+   uint64_t va = si_resource(spm->bo)->gpu_address;
 
    ac_emit_spm_setup(&cs->current, sctx->gfx_level, ip_type, spm, va);
 }
@@ -721,8 +718,8 @@ si_spm_init(struct si_context *sctx)
 void
 si_spm_finish(struct si_context *sctx)
 {
-   struct pb_buffer_lean *bo = sctx->spm.bo;
-   radeon_bo_reference(sctx->screen->ws, &bo, NULL);
+   struct pipe_resource *bo = sctx->spm.bo;
+   pipe_resource_reference(&bo, NULL);
 
    ac_destroy_spm(&sctx->spm);
 }

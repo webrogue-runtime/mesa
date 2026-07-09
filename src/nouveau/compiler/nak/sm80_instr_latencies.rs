@@ -70,7 +70,6 @@ enum URegLatencySM80 {
     VoteU,
 }
 
-#[allow(dead_code)]
 #[derive(Debug)]
 enum UPredLatencySM80 {
     Coupled,
@@ -186,7 +185,7 @@ impl RegLatencySM80 {
                 }
             }
             Op::CS2R(cs2r) => {
-                if cs2r.dst.as_reg().unwrap().comps() == 2 {
+                if cs2r.dst.comps() == 2 {
                     CoupledDisp64
                 } else {
                     CoupledAlu
@@ -244,6 +243,7 @@ impl RegLatencySM80 {
             Op::SuAtom(_) => Decoupled,
             Op::PixLd(_) => DecoupledAgu,
             Op::Isberd(_) => DecoupledAgu,
+            Op::Isbewr(_) => DecoupledAgu,
             Op::LdTram(_) => DecoupledAgu,
             Op::Shfl(_) => DecoupledAgu,
             Op::Ldsm(_) => DecoupledAgu,
@@ -1082,6 +1082,13 @@ impl URegLatencySM80 {
 
             Op::IMad64(_) => vcoupled,
             Op::ISetP(_) => vcoupled,
+            Op::ALd(_)
+            | Op::ASt(_)
+            | Op::Ld(_)
+            | Op::Ldsm(_)
+            | Op::St(_)
+            | Op::Atom(_) => vdecoupled,
+            Op::SuLd(_) | Op::SuSt(_) | Op::SuAtom(_) => vdecoupled,
             Op::Ldc(_) => {
                 if uniform_op {
                     Uldc
@@ -1447,23 +1454,23 @@ pub struct SM80Latency {}
 impl SM80Latency {
     pub fn needs_scoreboards(op: &Op) -> bool {
         if op.is_uniform() {
-            match URegLatencySM80::op_category(op, false, 0) {
-                URegLatencySM80::ToUr => true,
-                _ => false,
-            }
+            matches!(
+                URegLatencySM80::op_category(op, false, 0),
+                URegLatencySM80::ToUr
+            )
         } else {
-            match RegLatencySM80::op_category(op, false, 0) {
+            matches!(
+                RegLatencySM80::op_category(op, false, 0),
                 RegLatencySM80::RedirectedFP64
-                | RegLatencySM80::Clmad
-                | RegLatencySM80::IMMA_88
-                | RegLatencySM80::MMA_1x_collect
-                | RegLatencySM80::MMA_2x_collect
-                | RegLatencySM80::DMMA
-                | RegLatencySM80::Cbu
-                | RegLatencySM80::Decoupled
-                | RegLatencySM80::DecoupledAgu => true,
-                _ => false,
-            }
+                    | RegLatencySM80::Clmad
+                    | RegLatencySM80::IMMA_88
+                    | RegLatencySM80::MMA_1x_collect
+                    | RegLatencySM80::MMA_2x_collect
+                    | RegLatencySM80::DMMA
+                    | RegLatencySM80::Cbu
+                    | RegLatencySM80::Decoupled
+                    | RegLatencySM80::DecoupledAgu
+            )
         }
     }
 
@@ -1473,10 +1480,8 @@ impl SM80Latency {
         read: Option<&Op>,
         src_idx: usize,
     ) -> u32 {
-        let dst_file = match &write.dsts_as_slice()[dst_idx] {
-            Dst::None => return 0,
-            Dst::SSA(vec) => vec.file(),
-            Dst::Reg(reg) => reg.file(),
+        let Some(dst_file) = write.dsts_as_slice()[dst_idx].file() else {
+            return 0;
         };
 
         match dst_file {
@@ -1530,10 +1535,8 @@ impl SM80Latency {
     }
 
     pub fn war(read: &Op, src_idx: usize, write: &Op, dst_idx: usize) -> u32 {
-        let dst_file = match &write.dsts_as_slice()[dst_idx] {
-            Dst::None => return 0,
-            Dst::SSA(vec) => vec.file(),
-            Dst::Reg(reg) => reg.file(),
+        let Some(dst_file) = write.dsts_as_slice()[dst_idx].file() else {
+            return 0;
         };
 
         match dst_file {
@@ -1582,10 +1585,8 @@ impl SM80Latency {
         b_dst_idx: usize,
         a_op_pred: bool,
     ) -> u32 {
-        let dst_file = match &a.dsts_as_slice()[a_dst_idx] {
-            Dst::None => return 0,
-            Dst::SSA(vec) => vec.file(),
-            Dst::Reg(reg) => reg.file(),
+        let Some(dst_file) = a.dsts_as_slice()[a_dst_idx].file() else {
+            return 0;
         };
 
         match dst_file {

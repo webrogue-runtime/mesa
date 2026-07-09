@@ -120,20 +120,6 @@ files_libgallium = files(
   'pipebuffer/pb_cache.h',
   'pipebuffer/pb_validate.c',
   'pipebuffer/pb_validate.h',
-  'postprocess/filters.h',
-  'postprocess/postprocess.h',
-  'postprocess/pp_celshade.c',
-  'postprocess/pp_celshade.h',
-  'postprocess/pp_colors.c',
-  'postprocess/pp_colors.h',
-  'postprocess/pp_filters.h',
-  'postprocess/pp_init.c',
-  'postprocess/pp_mlaa_areamap.h',
-  'postprocess/pp_mlaa.c',
-  'postprocess/pp_mlaa.h',
-  'postprocess/pp_private.h',
-  'postprocess/pp_program.c',
-  'postprocess/pp_run.c',
   'rtasm/rtasm_execmem.c',
   'rtasm/rtasm_execmem.h',
   'rtasm/rtasm_x86sse.c',
@@ -420,7 +406,7 @@ endif
 if with_platform_x11
   files_libgalliumvlwinsys += files('vl/vl_winsys_dri.c')
   links_libgalliumvlwinsys += libloader_x11
-  if with_dri_platform == 'drm'
+  if with_dri_platform == 'drm' or with_dri_platform == 'pseudo-drm'
     vlwinsys_deps += [
       dep_xcb_sync, dep_xcb_present, dep_xshmfence, dep_xcb_xfixes,
       dep_xcb_dri3,

@@ -5,13 +5,13 @@
 
 #include "tu_lrz.h"
 
+#include "common/freedreno_gpu_event.h"
+#include "common/freedreno_lrz.h"
 #include "tu_clear_blit.h"
 #include "tu_cmd_buffer.h"
 #include "tu_cs.h"
 #include "tu_image.h"
-
-#include "common/freedreno_gpu_event.h"
-#include "common/freedreno_lrz.h"
+#include "tu_tracepoints.h"
 
 /* See lrz.rst for how HW works. Here are only the implementation notes.
  *
@@ -89,6 +89,7 @@ tu_lrz_disable_reason(struct tu_cmd_buffer *cmd, const char *reason) {
    cmd->state.rp.lrz_disabled_at_draw = cmd->state.rp.drawcall_count;
    perf_debug(cmd->device, "Disabling LRZ because '%s' at draw %u", reason,
               cmd->state.rp.lrz_disabled_at_draw);
+   trace_warning_lrz_disabled(&cmd->rp_trace, &cmd->draw_cs, cmd, reason);
 }
 
 void
@@ -99,25 +100,32 @@ tu_lrz_disable_write_for_rp(struct tu_cmd_buffer *cmd, const char *reason)
 
    cmd->state.lrz.disable_write_for_rp = true;
    cmd->state.rp.lrz_write_disabled_at_draw = cmd->state.rp.drawcall_count;
+   cmd->state.rp.lrz_write_disable_reason = reason;
    perf_debug(
       cmd->device,
       "Disabling LRZ write for the rest of the RP because '%s' at draw %u",
       reason, cmd->state.rp.lrz_write_disabled_at_draw);
+   trace_warning_lrz_write_disabled(&cmd->rp_trace, &cmd->draw_cs, cmd, reason);
 }
 
 template <chip CHIP>
 static void
 tu6_emit_lrz_buffer(struct tu_cs *cs, struct tu_image *depth_image)
 {
+   tu_crb crb = cs->crb(8);
+
    if (!depth_image) {
-      tu_cs_emit_regs(cs,
-                      A6XX_GRAS_LRZ_BUFFER_BASE(0),
-                      A6XX_GRAS_LRZ_BUFFER_PITCH(0),
-                      A6XX_GRAS_LRZ_FAST_CLEAR_BUFFER_BASE(0));
+      crb.add(GRAS_LRZ_BUFFER_BASE(CHIP, 0))
+         .add(GRAS_LRZ_BUFFER_PITCH(CHIP, 0))
+         .add(A6XX_GRAS_LRZ_FAST_CLEAR_BUFFER_BASE(0));
 
       if (CHIP >= A7XX) {
-         tu_cs_emit_regs(cs, A7XX_GRAS_LRZ_DEPTH_BUFFER_INFO());
-         tu_cs_emit_regs(cs, A7XX_GRAS_LRZ_CB_CNTL());
+         crb.add(GRAS_LRZ_DEPTH_BUFFER_INFO(CHIP));
+         crb.add(GRAS_LRZ_CB_CNTL(CHIP));
+      }
+
+      if (CHIP >= A8XX) {
+         crb.add(GRAS_LRZ_BUFFER_SLICE_PITCH(CHIP));
       }
 
       return;
@@ -129,19 +137,23 @@ tu6_emit_lrz_buffer(struct tu_cs *cs, struct tu_image *depth_image)
    if (!depth_image->lrz_layout.lrz_fc_offset)
       lrz_fc_iova = 0;
 
-   tu_cs_emit_regs(
-      cs, A6XX_GRAS_LRZ_BUFFER_BASE(.qword = lrz_iova),
-      A6XX_GRAS_LRZ_BUFFER_PITCH(.pitch = depth_image->lrz_layout.lrz_pitch,
-                                 .array_pitch =
-                                    depth_image->lrz_layout.lrz_layer_size),
-      A6XX_GRAS_LRZ_FAST_CLEAR_BUFFER_BASE(.qword = lrz_fc_iova));
+   crb.add(GRAS_LRZ_BUFFER_BASE(CHIP, .qword = lrz_iova))
+      .add(GRAS_LRZ_BUFFER_PITCH(
+         CHIP, .pitch = depth_image->lrz_layout.lrz_pitch * sizeof(uint16_t),
+         .array_pitch = depth_image->lrz_layout.lrz_layer_size))
+      .add(A6XX_GRAS_LRZ_FAST_CLEAR_BUFFER_BASE(.qword = lrz_fc_iova));
 
    if (CHIP >= A7XX) {
-      tu_cs_emit_regs(cs, A7XX_GRAS_LRZ_DEPTH_BUFFER_INFO(
-         .depth_format = tu6_pipe2depth(depth_image->vk.format)
+      crb.add(GRAS_LRZ_DEPTH_BUFFER_INFO(CHIP, .depth_format = tu6_pipe2depth(
+                                                 depth_image->vk.format)));
+      crb.add(GRAS_LRZ_CB_CNTL(CHIP, .double_buffer_pitch =
+                                   depth_image->lrz_layout.lrz_buffer_size));
+   }
+
+   if (CHIP >= A8XX) {
+      crb.add(GRAS_LRZ_BUFFER_SLICE_PITCH(CHIP,
+         depth_image->lrz_layout.lrz_slice_pitch
       ));
-      tu_cs_emit_regs(cs, A7XX_GRAS_LRZ_CB_CNTL(
-            .double_buffer_stride = depth_image->lrz_layout.lrz_buffer_size));
    }
 }
 
@@ -163,21 +175,21 @@ tu6_write_lrz_reg(struct tu_cmd_buffer *cmd, struct tu_cs *cs,
 template <chip CHIP>
 static void
 tu6_write_lrz_cntl(struct tu_cmd_buffer *cmd, struct tu_cs *cs,
-                   struct A6XX_GRAS_LRZ_CNTL cntl)
+                   struct __GRAS_LRZ_CNTL cntl)
 {
    if (CHIP >= A7XX) {
       /* A7XX split LRZ_CNTL into two seperate registers. */
-      struct tu_reg_value cntl2 = A7XX_GRAS_LRZ_CNTL2(
+      struct tu_reg_value cntl2 = GRAS_LRZ_CNTL2(CHIP,
          .disable_on_wrong_dir = cntl.disable_on_wrong_dir,
          .fc_enable = cntl.fc_enable,
       );
       cntl.disable_on_wrong_dir = false;
       cntl.fc_enable = false;
 
-      tu6_write_lrz_reg(cmd, cs, A6XX_GRAS_LRZ_CNTL(cntl));
+      tu6_write_lrz_reg(cmd, cs, __GRAS_LRZ_CNTL<CHIP>(cntl));
       tu6_write_lrz_reg(cmd, cs, cntl2);
    } else {
-      tu6_write_lrz_reg(cmd, cs, A6XX_GRAS_LRZ_CNTL(cntl));
+      tu6_write_lrz_reg(cmd, cs, __GRAS_LRZ_CNTL<CHIP>(cntl));
    }
 }
 
@@ -197,8 +209,8 @@ tu6_disable_lrz_via_depth_view(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
       .disable_on_wrong_dir = true,
    });
 
-   tu_emit_event_write<A6XX>(cmd, cs, FD_LRZ_CLEAR);
-   tu_emit_event_write<A6XX>(cmd, cs, FD_LRZ_FLUSH);
+   tu_emit_event_write<CHIP>(cmd, cs, FD_LRZ_CLEAR);
+   tu_emit_event_write<CHIP>(cmd, cs, FD_LRZ_FLUSH);
 }
 
 static void
@@ -207,7 +219,7 @@ tu_lrz_init_state(struct tu_cmd_buffer *cmd,
                   const struct tu_image_view *view)
 {
    if (!view->image->lrz_layout.lrz_total_size) {
-      assert(!cmd->device->use_lrz || !vk_format_has_depth(att->format));
+      trace_warning_depth_image_no_lrz(&cmd->trace, &cmd->draw_cs, cmd);
       return;
    }
 
@@ -216,15 +228,7 @@ tu_lrz_init_state(struct tu_cmd_buffer *cmd,
    bool has_gpu_tracking =
       cmd->device->physical_device->info->props.has_lrz_dir_tracking;
 
-   if (!has_gpu_tracking && !clears_depth)
-      return;
-
-   /* Reusing previous state doesn't work with FDM offset because the LRZ
-    * image is offsetted.
-    */
-   if ((view->image->vk.create_flags &
-        VK_IMAGE_CREATE_FRAGMENT_DENSITY_MAP_OFFSET_BIT_EXT) &&
-       !clears_depth)
+   if (!has_gpu_tracking && (!clears_depth || cmd->state.resuming))
       return;
 
    /* We need to always have an LRZ view just to disable it if there is a
@@ -236,13 +240,26 @@ tu_lrz_init_state(struct tu_cmd_buffer *cmd,
    cmd->state.lrz.image_view = view;
    cmd->state.lrz.store = att->store;
 
-   if (!clears_depth && !att->load)
+   /* Reusing previous state doesn't work with FDM offset because the LRZ
+    * image is offsetted.
+    */
+   if ((view->image->vk.create_flags &
+        VK_IMAGE_CREATE_FRAGMENT_DENSITY_MAP_OFFSET_BIT_EXT) &&
+       !clears_depth) {
+      tu_lrz_disable_reason(cmd, "FRAGMENT_DENSITY_MAP_OFFSET_BIT attachment used without depth attachment clear");
       return;
+   }
+
+   if (!clears_depth && !att->load) {
+      tu_lrz_disable_reason(cmd, "Depth attachment isn't loaded or cleared");
+      return;
+   }
 
    cmd->state.lrz.valid = true;
    cmd->state.lrz.valid_at_start = true;
    cmd->state.lrz.disable_write_for_rp = false;
-   cmd->state.lrz.color_written_with_z_test = false;
+   /* We have to assume previous draws may have set color_written_with_z_test */
+   cmd->state.lrz.color_written_with_z_test = cmd->state.resuming;
    cmd->state.lrz.has_lrz_write_with_skipped_color_writes = false;
    cmd->state.lrz.prev_direction = TU_LRZ_UNKNOWN;
    /* Be optimistic and unconditionally enable fast-clear in
@@ -279,6 +296,9 @@ tu_lrz_init_secondary(struct tu_cmd_buffer *cmd,
    cmd->state.lrz.valid = true;
    cmd->state.lrz.valid_at_start = true;
    cmd->state.lrz.disable_write_for_rp = false;
+   /* We will disable LRZ via tu_lrz_flush_valid_at_secondary_rp_boundary
+    * if assumption about color_written_with_z_test is wrong.
+    */
    cmd->state.lrz.color_written_with_z_test = false;
    cmd->state.lrz.has_lrz_write_with_skipped_color_writes = false;
    cmd->state.lrz.prev_direction = TU_LRZ_UNKNOWN;
@@ -346,8 +366,9 @@ tu_lrz_begin_renderpass(struct tu_cmd_buffer *cmd)
 {
    const struct tu_render_pass *pass = cmd->state.pass;
 
-   cmd->state.rp.lrz_disable_reason = "";
+   cmd->state.rp.lrz_disable_reason = NULL;
    cmd->state.rp.lrz_disabled_at_draw = 0;
+   cmd->state.rp.lrz_write_disable_reason = NULL;
    cmd->state.rp.lrz_write_disabled_at_draw = 0;
 
    int lrz_img_count = 0;
@@ -524,7 +545,7 @@ tu_lrz_tiling_begin(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
        *  CUR_DIR_UNSET.
        */
       if (CHIP >= A7XX)
-         tu_cs_emit_regs(cs, A7XX_GRAS_LRZ_DEPTH_CLEAR(lrz->depth_clear_value.depthStencil.depth));
+         tu_cs_emit_regs(cs, GRAS_LRZ_DEPTH_CLEAR(CHIP, lrz->depth_clear_value.depthStencil.depth));
       tu_emit_event_write<CHIP>(cmd, cs, FD_LRZ_CLEAR);
    }
 
@@ -704,7 +725,7 @@ tu_lrz_before_sysmem_br(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
           * dEQP-VK.pipeline.monolithic.color_write_enable.alpha_channel.static.*
           */
          if (lrz->fast_clear)
-            tu_cs_emit_regs(cs, A7XX_GRAS_LRZ_DEPTH_CLEAR(lrz->depth_clear_value.depthStencil.depth));
+            tu_cs_emit_regs(cs, GRAS_LRZ_DEPTH_CLEAR(CHIP, lrz->depth_clear_value.depthStencil.depth));
       } else {
          /* To workaround the same HW errata as above, but where we don't know
           * the clear value, copy the clear value from memory to the register.
@@ -731,14 +752,14 @@ tu_lrz_before_sysmem_br(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
          tu_cs_emit(cs, if_dwords + 1);
          /*    GRAS_LRZ_DEPTH_CLEAR = lrz_fc->buffer[1].depth_clear_val */
          tu_cs_emit_pkt7(cs, CP_MEM_TO_REG, 3);
-         tu_cs_emit(cs, CP_MEM_TO_REG_0_REG(REG_A7XX_GRAS_LRZ_DEPTH_CLEAR));
+         tu_cs_emit(cs, CP_MEM_TO_REG_0_REG(GRAS_LRZ_DEPTH_CLEAR(CHIP).reg));
          tu_cs_emit_qw(cs, lrz_fc_iova + offsetof(fd_lrzfc_layout<A7XX>,
                                                   buffer[1].depth_clear_val));
          /* } else { */
          tu_cs_emit_pkt7(cs, CP_NOP, else_dwords);
          /*    GRAS_LRZ_DEPTH_CLEAR = lrz_fc->buffer[0].depth_clear_val */
          tu_cs_emit_pkt7(cs, CP_MEM_TO_REG, 3);
-         tu_cs_emit(cs, CP_MEM_TO_REG_0_REG(REG_A7XX_GRAS_LRZ_DEPTH_CLEAR));
+         tu_cs_emit(cs, CP_MEM_TO_REG_0_REG(GRAS_LRZ_DEPTH_CLEAR(CHIP).reg));
          tu_cs_emit_qw(cs, lrz_fc_iova + offsetof(fd_lrzfc_layout<A7XX>,
                                                   buffer[0].depth_clear_val));
          /* } */
@@ -833,7 +854,7 @@ tu_lrz_sysmem_begin(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
          });
 
          if (CHIP >= A7XX)
-            tu_cs_emit_regs(cs, A7XX_GRAS_LRZ_DEPTH_CLEAR(lrz->depth_clear_value.depthStencil.depth));
+            tu_cs_emit_regs(cs, GRAS_LRZ_DEPTH_CLEAR(CHIP, lrz->depth_clear_value.depthStencil.depth));
          tu_emit_event_write<CHIP>(cmd, &cmd->cs, FD_LRZ_CLEAR);
          tu_emit_event_write<CHIP>(cmd, &cmd->cs, FD_LRZ_FLUSH);
       } else {
@@ -867,6 +888,9 @@ tu_disable_lrz(struct tu_cmd_buffer *cmd, struct tu_cs *cs,
 
    if (!image->lrz_layout.lrz_total_size)
       return;
+
+   trace_start_disable_lrz(&cmd->trace, &cmd->cs, cmd, image->vk.format,
+                           image->vk.extent.width, image->vk.extent.height);
 
    uint64_t lrz_iova = image->iova + image->lrz_layout.lrz_offset;
 
@@ -913,52 +937,10 @@ tu_disable_lrz(struct tu_cmd_buffer *cmd, struct tu_cs *cs,
       tu_cs_emit_qw(cs, TU_ONCHIP_CB_RESLIST_OVERFLOW);
       tu_cs_emit(cs, 0); /* value */
    }
+
+   trace_end_disable_lrz(&cmd->trace, &cmd->cs);
 }
 TU_GENX(tu_disable_lrz);
-
-/* Disable LRZ from the CPU, for host image copy */
-template <chip CHIP>
-void
-tu_disable_lrz_cpu(struct tu_device *device, struct tu_image *image)
-{
-   if (!device->physical_device->info->props.has_lrz_dir_tracking)
-      return;
-
-   if (!image->lrz_layout.lrz_total_size)
-      return;
-
-   const unsigned lrz_dir_offset = offsetof(fd_lrzfc_layout<CHIP>,
-                                            buffer[0].dir_track);
-   uint8_t *lrz_dir_tracking =
-      (uint8_t *)image->map + image->lrz_layout.lrz_fc_offset + lrz_dir_offset;
-
-   *lrz_dir_tracking = FD_LRZ_GPU_DIR_DISABLED;
-
-   if (image->mem->bo->cached_non_coherent) {
-      tu_bo_sync_cache(
-         device, image->mem->bo,
-         image->mem_offset + image->lrz_layout.lrz_offset + lrz_dir_offset, 1,
-         TU_MEM_SYNC_CACHE_TO_GPU);
-   }
-
-   if (CHIP >= A7XX) {
-      const unsigned lrz_dir_offset2 = offsetof(fd_lrzfc_layout<CHIP>,
-                                                buffer[1].dir_track);
-      uint8_t *lrz_dir_tracking2 =
-         (uint8_t *)image->map + image->lrz_layout.lrz_fc_offset + lrz_dir_offset2;
-
-      *lrz_dir_tracking2 = FD_LRZ_GPU_DIR_DISABLED;
-
-      if (image->mem->bo->cached_non_coherent) {
-         tu_bo_sync_cache(
-            device, image->mem->bo,
-            image->mem_offset + image->lrz_layout.lrz_offset + lrz_dir_offset2, 1,
-            TU_MEM_SYNC_CACHE_TO_GPU);
-      }
-   }
-
-}
-TU_GENX(tu_disable_lrz_cpu);
 
 /* Clear LRZ, used for out of renderpass depth clears. */
 template <chip CHIP>
@@ -1007,7 +989,7 @@ tu_lrz_clear_depth_image(struct tu_cmd_buffer *cmd,
    });
 
    if (CHIP >= A7XX)
-      tu_cs_emit_regs(&cmd->cs, A7XX_GRAS_LRZ_DEPTH_CLEAR(pDepthStencil->depth));
+      tu_cs_emit_regs(&cmd->cs, GRAS_LRZ_DEPTH_CLEAR(CHIP, pDepthStencil->depth));
    tu_emit_event_write<CHIP>(cmd, &cmd->cs, FD_LRZ_CLEAR);
    tu_emit_event_write<CHIP>(cmd, &cmd->cs, FD_LRZ_FLUSH);
 
@@ -1031,17 +1013,27 @@ tu_lrz_disable_during_renderpass(struct tu_cmd_buffer *cmd,
 }
 TU_GENX(tu_lrz_disable_during_renderpass);
 
-template <chip CHIP>
 void
-tu_lrz_flush_valid_during_renderpass(struct tu_cmd_buffer *cmd,
-                                     struct tu_cs *cs)
+tu_lrz_flush_valid_at_secondary_rp_boundary(
+   struct tu_cmd_buffer *cmd,
+   const struct tu_lrz_state &secondary_lrz,
+   struct tu_cs *cs)
 {
+   const bool lrz_blending_skipped_color_writes =
+      cmd->state.lrz.color_written_with_z_test &&
+      secondary_lrz.has_lrz_write_with_skipped_color_writes;
    /* Even if state is valid, we cannot be sure that secondary
     * command buffer has the same sticky disable_write_for_rp.
     */
    if (cmd->state.lrz.valid && !cmd->state.lrz.disable_write_for_rp &&
-       !cmd->state.lrz.has_lrz_write_with_skipped_color_writes)
+       !lrz_blending_skipped_color_writes)
       return;
+
+   if (lrz_blending_skipped_color_writes) {
+      tu_lrz_disable_reason(cmd, "Depth write + no color writes with secondary cmdbuf");
+   } else if (cmd->state.lrz.disable_write_for_rp) {
+      tu_lrz_disable_reason(cmd, "Disabled LRZ write with secondary cmdbuf");
+   }
 
    tu6_write_lrz_reg(cmd, cs, A6XX_GRAS_LRZ_VIEW_INFO(
       .base_layer = 0b11111111111,
@@ -1049,10 +1041,26 @@ tu_lrz_flush_valid_during_renderpass(struct tu_cmd_buffer *cmd,
       .base_mip_level = 0b1111,
    ));
 }
-TU_GENX(tu_lrz_flush_valid_during_renderpass);
+
+void
+tu_lrz_flush_valid_at_suspending_rp_boundary(struct tu_cmd_buffer *cmd,
+                                             struct tu_cs *cs)
+{
+   if (cmd->state.lrz.valid && !cmd->state.lrz.disable_write_for_rp)
+      return;
+
+   if (cmd->state.lrz.disable_write_for_rp)
+      tu_lrz_disable_reason(cmd, "Disabled LRZ write at renderpass suspend");
+
+   tu6_write_lrz_reg(cmd, cs, A6XX_GRAS_LRZ_VIEW_INFO(
+      .base_layer = 0b11111111111,
+      .layer_count = 0b11111111111,
+      .base_mip_level = 0b1111,
+   ));
+}
 
 template <chip CHIP>
-static struct A6XX_GRAS_LRZ_CNTL
+static struct __GRAS_LRZ_CNTL
 tu6_calculate_lrz_state(struct tu_cmd_buffer *cmd,
                         const uint32_t a)
 {
@@ -1063,7 +1071,7 @@ tu6_calculate_lrz_state(struct tu_cmd_buffer *cmd,
    VkCompareOp depth_compare_op =
       cmd->vk.dynamic_graphics_state.ds.depth.compare_op;
 
-   struct A6XX_GRAS_LRZ_CNTL gras_lrz_cntl = { 0 };
+   struct __GRAS_LRZ_CNTL gras_lrz_cntl = { 0 };
 
    cmd->state.lrz.force_late_z =
       fs->variant->writes_pos && !fs->variant->fs.early_fragment_tests;
@@ -1350,7 +1358,7 @@ void
 tu6_emit_lrz(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
 {
    const uint32_t a = cmd->state.subpass->depth_stencil_attachment.attachment;
-   struct A6XX_GRAS_LRZ_CNTL gras_lrz_cntl = tu6_calculate_lrz_state<CHIP>(cmd, a);
+   struct __GRAS_LRZ_CNTL gras_lrz_cntl = tu6_calculate_lrz_state<CHIP>(cmd, a);
 
    tu6_write_lrz_cntl<CHIP>(cmd, cs, gras_lrz_cntl);
    tu_cs_emit_regs(cs, A6XX_RB_LRZ_CNTL(.enable = gras_lrz_cntl.enable));

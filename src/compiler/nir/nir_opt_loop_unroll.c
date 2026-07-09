@@ -838,8 +838,7 @@ is_indirect_load(nir_instr *instr)
          if (!nir_deref_mode_may_be(deref, mem_modes))
             return false;
          while (deref) {
-            if ((deref->deref_type == nir_deref_type_array ||
-                 deref->deref_type == nir_deref_type_ptr_as_array) &&
+            if (nir_deref_instr_is_arr(deref) &&
                 !nir_src_is_const(deref->arr.index)) {
                return true;
             }
@@ -905,6 +904,9 @@ check_unrolling_restrictions(nir_shader *shader, nir_loop *loop)
    unsigned max_iter = shader->options->max_unroll_iterations;
    /* Unroll much more aggressively if it can hide load latency. */
    if (shader->options->max_unroll_iterations_aggressive && can_pipeline_loads(loop))
+      max_iter = shader->options->max_unroll_iterations_aggressive;
+   /* Unroll much more aggressively if all control flow gets eliminated. */
+   if (shader->options->max_unroll_iterations_aggressive && li->flattens_all_control_flow)
       max_iter = shader->options->max_unroll_iterations_aggressive;
    /* Tune differently if the loop has double ops and soft fp64 is in use */
    else if (shader->options->max_unroll_iterations_fp64 && loop->info->has_soft_fp64)
@@ -1081,10 +1083,12 @@ process_loops(nir_shader *sh, nir_cf_node *cf_node, bool *has_nested_loop_out,
          }
       }
 
-      /* Intentionally don't consider exact_trip_count_known here.  When
-       * max_trip_count is non-zero, it is the upper bound on the number of
-       * times the loop will iterate, but the loop may iterate less.  For
-       * example, the following loop will iterate 0 or 1 time:
+      /* Check whether the loop breaks after the first iteration.
+       * If exact_trip_count_known, this is the case if max_trip_count is
+       * either 1 or 0 (after loop peeling), respectively.  Otherwise, if
+       * max_trip_count is non-zero, it is the upper bound on the number
+       * of times the loop will iterate, but the loop may iterate less.
+       * For example, the following loop will iterate 0 or 1 time:
        *
        *    for (i = 0; i < min(x, 1); i++) { ... }
        *
@@ -1095,13 +1099,13 @@ process_loops(nir_shader *sh, nir_cf_node *cf_node, bool *has_nested_loop_out,
        * If the loop is known to execute at most once and meets the other
        * unrolling criteria, unroll it even if it has nested loops.
        *
-       * It is unlikely that such loops exist in real shaders. GraphicsFuzz is
-       * known to generate spurious loops that iterate exactly once.  It is
-       * plausible that it could eventually start generating loops like the
-       * example above, so it seems logical to defend against it now.
        */
+      bool breaks_after_first_iteration =
+         loop->info->max_trip_count == 1 ||
+         (loop->info->exact_trip_count_known && loop->info->max_trip_count <= 1);
+
       if (!loop->info->limiting_terminator ||
-          (loop->info->max_trip_count != 1 && has_nested_loop))
+          (!breaks_after_first_iteration && has_nested_loop))
          goto exit;
 
       if (!check_unrolling_restrictions(sh, loop))

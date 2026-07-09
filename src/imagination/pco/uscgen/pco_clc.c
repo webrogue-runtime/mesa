@@ -166,7 +166,6 @@ spv_to_nir(void *mem_ctx, uint32_t *spirv_map, unsigned spirv_len)
    nir_shader *nir = spirv_to_nir(spirv_map,
                                   spirv_len / 4,
                                   NULL,
-                                  0,
                                   MESA_SHADER_KERNEL,
                                   "library",
                                   &precomp_spirv_options,
@@ -470,13 +469,6 @@ int main(int argc, char *argv[argc])
                   nir_var_shader_temp | nir_var_function_temp |
                      nir_var_mem_shared | nir_var_mem_global,
                   nir_address_format_62bit_generic);
-
-         /* Unroll loops before lowering indirects */
-         bool progress;
-         do {
-            progress = false;
-            NIR_PASS(progress, s, nir_opt_loop);
-         } while (progress);
 
          for (unsigned d = 0; d < num_devices; ++d) {
             if (is_common && d != (num_devices - 1))

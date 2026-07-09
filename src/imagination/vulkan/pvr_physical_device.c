@@ -30,24 +30,22 @@
 #include "pvr_device.h"
 #include "pvr_dump_info.h"
 #include "pvr_entrypoints.h"
+#include "pvr_instance.h"
+#include "pvr_macros.h"
 #include "pvr_winsys.h"
 #include "pvr_wsi.h"
 
 #define VK_VENDOR_ID_IMAGINATION 0x1010
 
-void
-pvr_physical_device_dump_info(const struct pvr_physical_device *pdevice,
-                              char *const *comp_display,
-                              char *const *comp_render)
+void pvr_physical_device_dump_info(const struct pvr_physical_device *pdevice,
+                                   char *const *comp_display,
+                                   char *const *comp_render)
 {
    drmVersionPtr version_display = NULL, version_render;
    struct pvr_device_dump_info info = { 0 };
 
    if (pdevice->ws->display_fd >= 0)
       version_display = drmGetVersion(pdevice->ws->display_fd);
-
-   if (!version_display)
-      return;
 
    version_render = drmGetVersion(pdevice->ws->render_fd);
    if (!version_render) {
@@ -78,8 +76,7 @@ pvr_physical_device_dump_info(const struct pvr_physical_device *pdevice,
    drmFreeVersion(version_render);
 }
 
-void
-pvr_physical_device_destroy(struct vk_physical_device *vk_pdevice)
+void pvr_physical_device_destroy(struct vk_physical_device *vk_pdevice)
 {
    struct pvr_physical_device *pdevice =
       container_of(vk_pdevice, struct pvr_physical_device, vk);
@@ -107,8 +104,8 @@ pvr_physical_device_destroy(struct vk_physical_device *vk_pdevice)
    vk_free(&pdevice->vk.instance->alloc, pdevice);
 }
 
-void
-pvr_physical_device_free_pipeline_cache(struct pvr_physical_device *const pdevice)
+void pvr_physical_device_free_pipeline_cache(
+   struct pvr_physical_device *const pdevice)
 {
 #ifdef ENABLE_SHADER_CACHE
    if (!pdevice->vk.disk_cache)
@@ -126,7 +123,7 @@ static void pvr_physical_device_get_supported_extensions(
 {
    *extensions = (struct vk_device_extension_table){
       .KHR_bind_memory2 = true,
-      .KHR_buffer_device_address = true,
+      .KHR_buffer_device_address = false,
       .KHR_copy_commands2 = true,
       .KHR_create_renderpass2 = true,
       .KHR_dedicated_allocation = true,
@@ -134,6 +131,7 @@ static void pvr_physical_device_get_supported_extensions(
       .KHR_descriptor_update_template = true,
       .KHR_device_group = true,
       .KHR_driver_properties = true,
+      .KHR_dynamic_rendering = true,
       .KHR_external_fence = true,
       .KHR_external_fence_fd = true,
       .KHR_external_memory = true,
@@ -142,6 +140,7 @@ static void pvr_physical_device_get_supported_extensions(
       .KHR_external_semaphore_fd = PVR_USE_WSI_PLATFORM,
       .KHR_format_feature_flags2 = false,
       .KHR_get_memory_requirements2 = true,
+      .KHR_incremental_present = PVR_USE_WSI_PLATFORM,
       .KHR_image_format_list = true,
       .KHR_imageless_framebuffer = true,
       .KHR_index_type_uint8 = false,
@@ -149,17 +148,21 @@ static void pvr_physical_device_get_supported_extensions(
       .KHR_maintenance1 = true,
       .KHR_maintenance2 = true,
       .KHR_maintenance3 = true,
+      .KHR_maintenance4 = true,
       .KHR_map_memory2 = true,
       .KHR_multiview = true,
+      .KHR_pipeline_executable_properties = true,
       .KHR_present_id2 = PVR_USE_WSI_PLATFORM,
       .KHR_present_wait2 = PVR_USE_WSI_PLATFORM,
       .KHR_relaxed_block_layout = true,
       .KHR_robustness2 = true,
       .KHR_sampler_mirror_clamp_to_edge = true,
+      .KHR_sampler_ycbcr_conversion = true,
       .KHR_separate_depth_stencil_layouts = true,
       .KHR_shader_draw_parameters = true,
       .KHR_shader_expect_assume = false,
       .KHR_shader_float_controls = true,
+      .KHR_shader_integer_dot_product = true,
       .KHR_shader_non_semantic_info = true,
       .KHR_shader_relaxed_extended_instruction = true,
       .KHR_shader_subgroup_extended_types = true,
@@ -177,6 +180,7 @@ static void pvr_physical_device_get_supported_extensions(
       .EXT_custom_border_color = true,
       .EXT_depth_clamp_zero_one = true,
       .EXT_depth_clip_enable = true,
+      .EXT_image_drm_format_modifier = true,
       .EXT_extended_dynamic_state = true,
       .EXT_extended_dynamic_state2 = true,
       .EXT_extended_dynamic_state3 = true,
@@ -186,6 +190,7 @@ static void pvr_physical_device_get_supported_extensions(
       .EXT_index_type_uint8 = false,
       .EXT_line_rasterization = true,
       .EXT_map_memory_placed = true,
+      .EXT_non_seamless_cube_map = true,
       .EXT_physical_device_drm = true,
       .EXT_private_data = true,
       .EXT_provoking_vertex = true,
@@ -209,7 +214,7 @@ static void pvr_physical_device_get_supported_features(
    *features = (struct vk_features){
       /* Vulkan 1.0 */
       .robustBufferAccess = true,
-      .fullDrawIndexUint32 = false,
+      .fullDrawIndexUint32 = true,
       .imageCubeArray = true,
       .independentBlend = true,
       .geometryShader = false,
@@ -217,13 +222,13 @@ static void pvr_physical_device_get_supported_features(
       .sampleRateShading = true,
       .dualSrcBlend = false,
       .logicOp = true,
-      .multiDrawIndirect = false,
+      .multiDrawIndirect = true,
       .drawIndirectFirstInstance = true,
       .depthClamp = false,
-      .depthBiasClamp = false,
+      .depthBiasClamp = true,
       .fillModeNonSolid = false,
       .depthBounds = false,
-      .wideLines = false,
+      .wideLines = true,
       .largePoints = true,
       .alphaToOne = true,
       .multiViewport = false,
@@ -236,7 +241,7 @@ static void pvr_physical_device_get_supported_features(
       .vertexPipelineStoresAndAtomics = false,
       .fragmentStoresAndAtomics = false,
       .shaderTessellationAndGeometryPointSize = false,
-      .shaderImageGatherExtended = false,
+      .shaderImageGatherExtended = true,
       .shaderStorageImageExtendedFormats = true,
       .shaderStorageImageMultisample = false,
       .shaderStorageImageReadWithoutFormat = true,
@@ -271,7 +276,7 @@ static void pvr_physical_device_get_supported_features(
       .storageInputOutput16 = false,
       .variablePointers = false,
       .protectedMemory = false,
-      .samplerYcbcrConversion = false,
+      .samplerYcbcrConversion = true,
 
       /* Vulkan 1.2 */
       .samplerMirrorClampToEdge = true,
@@ -326,8 +331,14 @@ static void pvr_physical_device_get_supported_features(
       .multiviewGeometryShader = false,
       .multiviewTessellationShader = false,
 
+      /* Vulkan 1.3 / VK_KHR_maintenance4 */
+      .maintenance4 = true,
+
       /* Vulkan 1.1 / VK_KHR_shader_draw_parameters */
       .shaderDrawParameters = true,
+
+      /* Vulkan 1.3 / VK_KHR_shader_integer_dot_product */
+      .shaderIntegerDotProduct = true,
 
       /* Vulkan 1.2 / VK_KHR_timeline_semaphore */
       .timelineSemaphore = true,
@@ -405,6 +416,9 @@ static void pvr_physical_device_get_supported_features(
       .memoryMapRangePlaced = false,
       .memoryUnmapReserve = true,
 
+      /* VK_EXT_non_seamless_cube_map */
+      .nonSeamlessCubeMap = true,
+
       /* Vulkan 1.3 / VK_EXT_private_data */
       .privateData = true,
 
@@ -419,7 +433,7 @@ static void pvr_physical_device_get_supported_features(
       .texelBufferAlignment = true,
 
       /* Vulkan 1.2 / VK_KHR_buffer_device_address */
-      .bufferDeviceAddress = true,
+      .bufferDeviceAddress = false,
       .bufferDeviceAddressCaptureReplay = false,
       .bufferDeviceAddressMultiDevice = false,
 
@@ -464,6 +478,12 @@ static void pvr_physical_device_get_supported_features(
 
       /* VK_EXT_zero_initialize_device_memory */
       .zeroInitializeDeviceMemory = true,
+
+      /* Vulkan 1.2 / VK_KHR_dynamic_rendering */
+      .dynamicRendering = true,
+
+      /* VK_KHR_pipeline_executable_properties */
+      .pipelineExecutableInfo = true,
    };
 }
 
@@ -560,11 +580,11 @@ static bool pvr_physical_device_get_properties(
       .maxBoundDescriptorSets = 4U,
       .maxPerStageDescriptorSamplers = 16,
       .maxPerStageDescriptorUniformBuffers = 12,
-      .maxPerStageDescriptorStorageBuffers = 4,
+      .maxPerStageDescriptorStorageBuffers = 8,
       .maxPerStageDescriptorSampledImages = 16,
       .maxPerStageDescriptorStorageImages = 4,
       .maxPerStageDescriptorInputAttachments = 4,
-      .maxPerStageResources = 44,
+      .maxPerStageResources = 48,
       .maxDescriptorSetSamplers = 3U * 16U,
       .maxDescriptorSetUniformBuffers = 3U * 12U,
       .maxDescriptorSetUniformBuffersDynamic = 8U,
@@ -625,8 +645,8 @@ static bool pvr_physical_device_get_properties(
       .subTexelPrecisionBits = 8U,
       .mipmapPrecisionBits = 8U,
 
-      .maxDrawIndexedIndexValue = (1U << 24) - 1U, /* Requires fullDrawIndexUint32 */
-      .maxDrawIndirectCount = 1U, /* Requires multiDrawIndirect */
+      .maxDrawIndexedIndexValue = UINT32_MAX,
+      .maxDrawIndirectCount = 2U * 1024U * 1024U * 1024U,
       .maxSamplerLodBias = 16.0f,
       .maxSamplerAnisotropy = 16.0f, /* Requires samplerAnisotropy */
       .maxViewports = 1U, /* Requires multiViewport */
@@ -646,8 +666,8 @@ static bool pvr_physical_device_get_properties(
       .maxTexelOffset = 7U,
 
       /* Requires shaderImageGatherExtended */
-      .minTexelGatherOffset = 0,
-      .maxTexelGatherOffset = 0U,
+      .minTexelGatherOffset = -8,
+      .maxTexelGatherOffset = 7U,
 
       /* Requires sampleRateShading */
       .minInterpolationOffset = -0.5f,
@@ -658,6 +678,7 @@ static bool pvr_physical_device_get_properties(
       .maxFramebufferHeight = 4096U,
       .maxFramebufferLayers = 256U,
 
+      /* Note: update nir_shader_compiler_options.max_samples when changing this. */
       .framebufferColorSampleCounts = VK_SAMPLE_COUNT_1_BIT | VK_SAMPLE_COUNT_4_BIT,
       .framebufferDepthSampleCounts = VK_SAMPLE_COUNT_1_BIT | VK_SAMPLE_COUNT_4_BIT,
       .framebufferStencilSampleCounts = VK_SAMPLE_COUNT_1_BIT | VK_SAMPLE_COUNT_4_BIT,
@@ -682,10 +703,9 @@ static bool pvr_physical_device_get_properties(
       .pointSizeRange[1] = PVR_POINT_SIZE_RANGE_MAX,
       .pointSizeGranularity = PVR_POINT_SIZE_GRANULARITY,
 
-      /* Requires wideLines */
-      .lineWidthRange[0] = 1.0f,
-      .lineWidthRange[1] = 1.0f,
-      .lineWidthGranularity = 0.0f,
+      .lineWidthRange[0] = PVR_LINE_WIDTH_MIN,
+      .lineWidthRange[1] = PVR_LINE_WIDTH_MAX,
+      .lineWidthGranularity = PVR_LINE_WIDTH_GRANULARITY,
 
       .strictLines = false,
       .standardSampleLocations = true,
@@ -786,6 +806,38 @@ static bool pvr_physical_device_get_properties(
       .shaderRoundingModeRTZFloat32 = !usc_alu_roundingmode_rne,
       .shaderRoundingModeRTZFloat64 = !usc_alu_roundingmode_rne,
 
+      /* Vulkan 1.3 / VK_KHR_shader_integer_dot_product */
+      .integerDotProduct8BitUnsignedAccelerated = false,
+      .integerDotProduct8BitSignedAccelerated = false,
+      .integerDotProduct8BitMixedSignednessAccelerated = false,
+      .integerDotProduct4x8BitPackedUnsignedAccelerated = false,
+      .integerDotProduct4x8BitPackedSignedAccelerated = false,
+      .integerDotProduct4x8BitPackedMixedSignednessAccelerated = false,
+      .integerDotProduct16BitUnsignedAccelerated = false,
+      .integerDotProduct16BitSignedAccelerated = false,
+      .integerDotProduct16BitMixedSignednessAccelerated = false,
+      .integerDotProduct32BitUnsignedAccelerated = false,
+      .integerDotProduct32BitSignedAccelerated = false,
+      .integerDotProduct32BitMixedSignednessAccelerated = false,
+      .integerDotProduct64BitUnsignedAccelerated = false,
+      .integerDotProduct64BitSignedAccelerated = false,
+      .integerDotProduct64BitMixedSignednessAccelerated = false,
+      .integerDotProductAccumulatingSaturating8BitUnsignedAccelerated = false,
+      .integerDotProductAccumulatingSaturating8BitSignedAccelerated = false,
+      .integerDotProductAccumulatingSaturating8BitMixedSignednessAccelerated = false,
+      .integerDotProductAccumulatingSaturating4x8BitPackedUnsignedAccelerated = false,
+      .integerDotProductAccumulatingSaturating4x8BitPackedSignedAccelerated = false,
+      .integerDotProductAccumulatingSaturating4x8BitPackedMixedSignednessAccelerated = false,
+      .integerDotProductAccumulatingSaturating16BitUnsignedAccelerated = false,
+      .integerDotProductAccumulatingSaturating16BitSignedAccelerated = false,
+      .integerDotProductAccumulatingSaturating16BitMixedSignednessAccelerated = false,
+      .integerDotProductAccumulatingSaturating32BitUnsignedAccelerated = false,
+      .integerDotProductAccumulatingSaturating32BitSignedAccelerated = false,
+      .integerDotProductAccumulatingSaturating32BitMixedSignednessAccelerated = false,
+      .integerDotProductAccumulatingSaturating64BitUnsignedAccelerated = false,
+      .integerDotProductAccumulatingSaturating64BitSignedAccelerated = false,
+      .integerDotProductAccumulatingSaturating64BitMixedSignednessAccelerated = false,
+
       /* Vulkan 1.2 / VK_KHR_timeline_semaphore */
       .maxTimelineSemaphoreValueDifference = UINT64_MAX,
 
@@ -795,6 +847,9 @@ static bool pvr_physical_device_get_properties(
       .uniformTexelBufferOffsetAlignmentBytes = PVR_TEXEL_BUFFER_OFFSET_ALIGNMENT,
       .uniformTexelBufferOffsetSingleTexelAlignment = false,
 
+      /* Vulkan 1.3 / VK_KHR_maintenance4 */
+      .maxBufferSize = max_memory_alloc_size,
+
       /* Vulkan 1.4 / VK_EXT_vertex_attribute_divisor / VK_KHR_vertex_attribute_divisor */
       .maxVertexAttribDivisor = UINT32_MAX,
       .supportsNonZeroFirstInstance = true,
@@ -803,8 +858,8 @@ static bool pvr_physical_device_get_properties(
       .maxCustomBorderColorSamplers =
          get_custom_border_color_samplers(&pdevice->dev_info),
 
-      /* VkPhysicalDeviceDrmPropertiesEXT */
-      .drmHasPrimary = true,
+      /* VK_EXT_physical_device_drm */
+      .drmHasPrimary = pdevice->has_primary,
       .drmPrimaryMajor = (int64_t) major(pdevice->primary_devid),
       .drmPrimaryMinor = (int64_t) minor(pdevice->primary_devid),
       .drmHasRender = true,
@@ -846,11 +901,11 @@ static bool pvr_physical_device_setup_pipeline_cache(
 {
 #ifdef ENABLE_SHADER_CACHE
    const struct pvr_instance *instance = pdevice->instance;
-   char device_id[SHA1_DIGEST_LENGTH * 2 + 1];
-   char driver_id[SHA1_DIGEST_LENGTH * 2 + 1];
+   char device_id[BLAKE3_KEY_LEN * 2 + 1];
+   char driver_id[BLAKE3_KEY_LEN * 2 + 1];
 
-   _mesa_sha1_format(device_id, pdevice->device_uuid);
-   _mesa_sha1_format(driver_id, instance->driver_build_sha);
+   _mesa_blake3_format(device_id, pdevice->device_uuid);
+   _mesa_blake3_format(driver_id, instance->driver_build_sha);
 
    pdevice->vk.disk_cache = disk_cache_create(device_id, driver_id, 0U);
    return !!pdevice->vk.disk_cache;
@@ -861,35 +916,35 @@ static bool pvr_physical_device_setup_pipeline_cache(
 
 static void
 pvr_get_device_uuid(const struct pvr_device_info *dev_info,
-                    uint8_t uuid_out[const static SHA1_DIGEST_LENGTH])
+                    uint8_t uuid_out[const static BLAKE3_KEY_LEN])
 {
    uint64_t bvnc = pvr_get_packed_bvnc(dev_info);
    static const char *device_str = "pvr";
-   struct mesa_sha1 sha1_ctx;
+   blake3_hasher blake3_ctx;
 
-   _mesa_sha1_init(&sha1_ctx);
-   _mesa_sha1_update(&sha1_ctx, device_str, strlen(device_str));
-   _mesa_sha1_update(&sha1_ctx, &bvnc, sizeof(bvnc));
-   _mesa_sha1_final(&sha1_ctx, uuid_out);
+   _mesa_blake3_init(&blake3_ctx);
+   _mesa_blake3_update(&blake3_ctx, device_str, strlen(device_str));
+   _mesa_blake3_update(&blake3_ctx, &bvnc, sizeof(bvnc));
+   _mesa_blake3_final(&blake3_ctx, uuid_out);
 }
 
 static void
 pvr_get_cache_uuid(const struct pvr_physical_device *const pdevice,
-                   uint8_t uuid_out[const static SHA1_DIGEST_LENGTH])
+                   uint8_t uuid_out[const static BLAKE3_KEY_LEN])
 {
    const struct pvr_instance *instance = pdevice->instance;
    static const char *cache_str = "cache";
-   struct mesa_sha1 sha1_ctx;
+   blake3_hasher blake3_ctx;
 
-   _mesa_sha1_init(&sha1_ctx);
-   _mesa_sha1_update(&sha1_ctx, cache_str, strlen(cache_str));
-   _mesa_sha1_update(&sha1_ctx,
+   _mesa_blake3_init(&blake3_ctx);
+   _mesa_blake3_update(&blake3_ctx, cache_str, strlen(cache_str));
+   _mesa_blake3_update(&blake3_ctx,
                      pdevice->device_uuid,
                      sizeof(pdevice->device_uuid));
-   _mesa_sha1_update(&sha1_ctx,
+   _mesa_blake3_update(&blake3_ctx,
                      instance->driver_build_sha,
                      sizeof(instance->driver_build_sha));
-   _mesa_sha1_final(&sha1_ctx, uuid_out);
+   _mesa_blake3_final(&blake3_ctx, uuid_out);
 }
 
 static void
@@ -958,6 +1013,9 @@ static uint64_t pvr_compute_heap_size(void)
    return MAX2(available_ram, PVR_MAX_MEMORY_ALLOCATION_SIZE);
 }
 
+static void
+pvr_physical_device_setup_formats(struct pvr_physical_device *const pdevice);
+
 VkResult pvr_physical_device_init(struct pvr_physical_device *pdevice,
                                   struct pvr_instance *instance,
                                   drmDevicePtr drm_render_device,
@@ -995,14 +1053,12 @@ VkResult pvr_physical_device_init(struct pvr_physical_device *pdevice,
    }
 
    primary_path = drm_render_device->nodes[DRM_NODE_PRIMARY];
-   if (stat(primary_path, &primary_stat) != 0) {
-      result = vk_errorf(instance,
-                         VK_ERROR_INITIALIZATION_FAILED,
-                         "failed to stat DRM primary node %s",
-                         primary_path);
-      goto err_vk_free_display_path;
+   pdevice->has_primary = false;
+   pdevice->primary_devid = 0;
+   if (!stat(primary_path, &primary_stat)) {
+      pdevice->has_primary = true;
+      pdevice->primary_devid = primary_stat.st_rdev;
    }
-   pdevice->primary_devid = primary_stat.st_rdev;
 
    if (stat(render_path, &render_stat) != 0) {
       result = vk_errorf(instance,
@@ -1014,7 +1070,8 @@ VkResult pvr_physical_device_init(struct pvr_physical_device *pdevice,
    pdevice->render_devid = render_stat.st_rdev;
 
    result =
-      pvr_winsys_create(render_path, display_path, &instance->vk.alloc, &ws);
+      pvr_winsys_create(render_path, display_path, true,
+                        &instance->vk.alloc, &ws);
    if (result != VK_SUCCESS)
       goto err_vk_free_display_path;
 
@@ -1084,6 +1141,8 @@ VkResult pvr_physical_device_init(struct pvr_physical_device *pdevice,
                                     &dispatch_table);
    if (result != VK_SUCCESS)
       goto err_pvr_winsys_destroy;
+
+   pvr_physical_device_setup_formats(pdevice);
 
    pvr_physical_device_setup_uuids(pdevice);
 
@@ -1177,13 +1236,38 @@ void pvr_GetPhysicalDeviceMemoryProperties2(
    }
 }
 
+#define PER_ARCH_FUNCS(arch)                                                  \
+   VkResult pvr_##arch##_create_device(                                       \
+      struct pvr_physical_device *physical_device,                            \
+      const VkDeviceCreateInfo *pCreateInfo,                                  \
+      const VkAllocationCallbacks *pAllocator,                                \
+      VkDevice *pDevice);                                                     \
+                                                                              \
+   void pvr_##arch##_destroy_device(struct pvr_device *device,                \
+                                    const VkAllocationCallbacks *pAllocator); \
+                                                                              \
+   struct pvr_format_table pvr_##arch##_get_format_table(void)
+
+PER_ARCH_FUNCS(rogue);
+
 VkResult pvr_CreateDevice(VkPhysicalDevice physicalDevice,
                           const VkDeviceCreateInfo *pCreateInfo,
                           const VkAllocationCallbacks *pAllocator,
                           VkDevice *pDevice)
 {
    VK_FROM_HANDLE(pvr_physical_device, pdevice, physicalDevice);
-   return pvr_create_device(pdevice, pCreateInfo, pAllocator, pDevice);
+
+   enum pvr_device_arch arch = pdevice->dev_info.ident.arch;
+   VkResult result = VK_ERROR_INITIALIZATION_FAILED;
+   PVR_ARCH_DISPATCH_RET(create_device,
+                         arch,
+                         result,
+                         pdevice,
+                         pCreateInfo,
+                         pAllocator,
+                         pDevice);
+
+   return result;
 }
 
 void pvr_DestroyDevice(VkDevice _device,
@@ -1191,10 +1275,19 @@ void pvr_DestroyDevice(VkDevice _device,
 {
    VK_FROM_HANDLE(pvr_device, device, _device);
 
-   pvr_destroy_device(device, pAllocator);
+   enum pvr_device_arch arch = device->pdevice->dev_info.ident.arch;
+   PVR_ARCH_DISPATCH(destroy_device, arch, device, pAllocator);
+}
+
+static void
+pvr_physical_device_setup_formats(struct pvr_physical_device *const pdevice)
+{
+   enum pvr_device_arch arch = pdevice->dev_info.ident.arch;
+   PVR_ARCH_DISPATCH_RET(get_format_table, arch, pdevice->formats);
 }
 
 /* Leave this at the very end, to avoid leakage of HW-defs here */
+#define PVR_BUILD_ARCH_ROGUE
 #include "pvr_border.h"
 
 static unsigned

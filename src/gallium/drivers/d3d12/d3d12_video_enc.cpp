@@ -73,7 +73,6 @@ d3d12_video_encoder_convert_codec_to_d3d12_enc_codec(enum pipe_video_profile pro
          return D3D12_VIDEO_ENCODER_CODEC_AV1;
       } break;
       case PIPE_VIDEO_FORMAT_MPEG12:
-      case PIPE_VIDEO_FORMAT_MPEG4:
       case PIPE_VIDEO_FORMAT_VC1:
       case PIPE_VIDEO_FORMAT_JPEG:
       case PIPE_VIDEO_FORMAT_VP9:
@@ -293,13 +292,17 @@ d3d12_video_encoder_destroy(struct pipe_video_codec *codec)
    struct d3d12_context* ctx = d3d12_context(pD3D12Enc->base.context);
    if (ctx->priority_manager)
    {
-      if (ctx->priority_manager->unregister_work_queue(ctx->priority_manager, pD3D12Enc->m_spEncodeCommandQueue.Get()) != 0)
+      // Command queues may be NULL when destroy is called from a failed creation path before initialization reached
+      // the point of registering the command queues, so check for nullptr before trying to unregister from priority manager
+      if (pD3D12Enc->m_spEncodeCommandQueue &&
+          ctx->priority_manager->unregister_work_queue(ctx->priority_manager, pD3D12Enc->m_spEncodeCommandQueue.Get()) != 0)
       {
          debug_printf("D3D12: Failed to unregister command queue with frontend priority manager\n");
          assert(false);
       }
 
-      if (ctx->priority_manager->unregister_work_queue(ctx->priority_manager, pD3D12Enc->m_spResolveCommandQueue.Get()) != 0)
+      if (pD3D12Enc->m_spResolveCommandQueue &&
+          ctx->priority_manager->unregister_work_queue(ctx->priority_manager, pD3D12Enc->m_spResolveCommandQueue.Get()) != 0)
       {
          debug_printf("D3D12: Failed to unregister command queue with frontend priority manager\n");
          assert(false);
@@ -991,17 +994,17 @@ d3d12_video_encoder_reconfigure_encoder_objects(struct d3d12_video_encoder *pD3D
          }
 
          //
-         // Prefer individual slice buffers when possible
+         // Prefer single buffer mode when possible
          //
          if (pD3D12Enc->m_currentEncodeCapabilities.m_SupportFlags &
-            D3D12_VIDEO_ENCODER_SUPPORT_FLAG_SUBREGION_NOTIFICATION_ARRAY_OF_BUFFERS_AVAILABLE)
-         {
-            heapFlags |= D3D12_VIDEO_ENCODER_HEAP_FLAG_ALLOW_SUBREGION_NOTIFICATION_ARRAY_OF_BUFFERS;
-         }
-         else if (pD3D12Enc->m_currentEncodeCapabilities.m_SupportFlags &
             D3D12_VIDEO_ENCODER_SUPPORT_FLAG_SUBREGION_NOTIFICATION_SINGLE_BUFFER_AVAILABLE)
          {
             heapFlags |= D3D12_VIDEO_ENCODER_HEAP_FLAG_ALLOW_SUBREGION_NOTIFICATION_SINGLE_BUFFER;
+         }
+         else if (pD3D12Enc->m_currentEncodeCapabilities.m_SupportFlags &
+            D3D12_VIDEO_ENCODER_SUPPORT_FLAG_SUBREGION_NOTIFICATION_ARRAY_OF_BUFFERS_AVAILABLE)
+         {
+            heapFlags |= D3D12_VIDEO_ENCODER_HEAP_FLAG_ALLOW_SUBREGION_NOTIFICATION_ARRAY_OF_BUFFERS;
          }
 
          if (pD3D12Enc->m_currentEncodeConfig.m_TwoPassEncodeDesc.AppRequested)
@@ -2436,7 +2439,6 @@ d3d12_video_encoder_create_command_objects(struct d3d12_video_encoder *pD3D12Enc
 
       // Initialize fence for the in flight resource pool slot
       inputResource.m_CompletionFence.reset(d3d12_create_fence_raw(pD3D12Enc->m_spFence.Get(), CompletionFenceValue));
-      inputResource.m_CompletionFence.reset(d3d12_create_fence_raw(pD3D12Enc->m_spLastSliceFence.Get(), CompletionFenceValue));
       CompletionFenceValue++;
    }
 
@@ -3026,7 +3028,7 @@ d3d12_video_encoder_calculate_max_slices_count_in_output(
       case D3D12_VIDEO_ENCODER_FRAME_SUBREGION_LAYOUT_MODE_BYTES_PER_SUBREGION:
       case D3D12_VIDEO_ENCODER_FRAME_SUBREGION_LAYOUT_MODE_AUTO:
       {
-         maxSlices = MaxSubregionsNumberFromCaps;
+         maxSlices = std::max(128u, MaxSubregionsNumberFromCaps);
       } break;
       case D3D12_VIDEO_ENCODER_FRAME_SUBREGION_LAYOUT_MODE_SQUARE_UNITS_PER_SUBREGION_ROW_UNALIGNED:
       {
@@ -3320,6 +3322,9 @@ d3d12_video_encoder_encode_bitstream(struct pipe_video_codec * codec,
                                              &slice_fences,
                                              &last_slice_completion_fence,
                                              feedback);
+   // Release local fence references to prevent leaking pipe fences + event handles each frame
+   if (last_slice_completion_fence)
+      d3d12_fence_reference((struct d3d12_fence **)&last_slice_completion_fence, NULL);
 }
 
 void
@@ -4067,15 +4072,10 @@ d3d12_video_encoder_encode_bitstream_impl(struct pipe_video_codec *codec,
          bitstreamArgs.NotificationMode = D3D12_VIDEO_ENCODER_COMPRESSED_BITSTREAM_NOTIFICATION_MODE_SUBREGIONS;
 
          //
-         // Prefer individual slice buffers when possible
+         // Prefer single buffer mode when possible
          //
-         D3D12_VIDEO_ENCODER_SUBREGION_COMPRESSED_BITSTREAM_BUFFER_MODE slicedEncodeBufferMode = D3D12_VIDEO_ENCODER_SUBREGION_COMPRESSED_BITSTREAM_BUFFER_MODE_ARRAY_OF_BUFFERS;
+         D3D12_VIDEO_ENCODER_SUBREGION_COMPRESSED_BITSTREAM_BUFFER_MODE slicedEncodeBufferMode = D3D12_VIDEO_ENCODER_SUBREGION_COMPRESSED_BITSTREAM_BUFFER_MODE_SINGLE_BUFFER;
          if (pD3D12Enc->m_currentEncodeCapabilities.m_SupportFlags &
-            D3D12_VIDEO_ENCODER_SUPPORT_FLAG_SUBREGION_NOTIFICATION_ARRAY_OF_BUFFERS_AVAILABLE)
-         {
-            slicedEncodeBufferMode = D3D12_VIDEO_ENCODER_SUBREGION_COMPRESSED_BITSTREAM_BUFFER_MODE_ARRAY_OF_BUFFERS;
-         }
-         else if (pD3D12Enc->m_currentEncodeCapabilities.m_SupportFlags &
             D3D12_VIDEO_ENCODER_SUPPORT_FLAG_SUBREGION_NOTIFICATION_SINGLE_BUFFER_AVAILABLE)
          {
             slicedEncodeBufferMode = D3D12_VIDEO_ENCODER_SUBREGION_COMPRESSED_BITSTREAM_BUFFER_MODE_SINGLE_BUFFER;
@@ -4083,6 +4083,11 @@ d3d12_video_encoder_encode_bitstream_impl(struct pipe_video_codec *codec,
             for (uint32_t i = 0; i < num_slice_objects;i++)
                assert(pD3D12Enc->m_pOutputBufferD3D12Resources[i] == pD3D12Enc->m_pOutputBufferD3D12Resources[0]);
    #endif
+         }
+         else if (pD3D12Enc->m_currentEncodeCapabilities.m_SupportFlags &
+            D3D12_VIDEO_ENCODER_SUPPORT_FLAG_SUBREGION_NOTIFICATION_ARRAY_OF_BUFFERS_AVAILABLE)
+         {
+            slicedEncodeBufferMode = D3D12_VIDEO_ENCODER_SUBREGION_COMPRESSED_BITSTREAM_BUFFER_MODE_ARRAY_OF_BUFFERS;
          }
          else
          {
@@ -4144,7 +4149,39 @@ d3d12_video_encoder_encode_bitstream_impl(struct pipe_video_codec *codec,
             pD3D12Enc->m_spEncodedFrameMetadata[current_metadata_slot].ppSubregionSizes[i] = pD3D12Enc->m_spEncodedFrameMetadata[current_metadata_slot].pspSubregionSizes[i].Get();
 
             if (pD3D12Enc->m_spEncodedFrameMetadata[current_metadata_slot].pspSubregionFences[i] == nullptr)
+            {
                hr = pD3D12Enc->m_pD3D12Screen->dev->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&pD3D12Enc->m_spEncodedFrameMetadata[current_metadata_slot].pspSubregionFences[i]));
+               if (FAILED(hr)) {
+                  debug_printf("CreateFence failed with HR %x\n", (unsigned)hr);
+                  pD3D12Enc->m_inflightResourcesPool[d3d12_video_encoder_pool_current_index(pD3D12Enc)].encode_result = PIPE_VIDEO_FEEDBACK_METADATA_ENCODE_FLAG_FAILED;
+                  pD3D12Enc->m_spEncodedFrameMetadata[d3d12_video_encoder_metadata_current_index(pD3D12Enc)].encode_result = PIPE_VIDEO_FEEDBACK_METADATA_ENCODE_FLAG_FAILED;
+                  assert(false);
+                  return;
+               }
+            }
+            else if (pD3D12Enc->m_spEncodedFrameMetadata[current_metadata_slot].ppSubregionFenceValues[i] > 0)
+            {
+               // The ID3D12Fence objects in pspSubregionFences are reused across frames, but the
+               // d3d12_fence wrappers (pSubregionPipeFences) are recreated each frame via
+               // d3d12_create_fence_raw which calls SetEventOnCompletion. When a fence was never
+               // GPU-signaled (e.g. AUTO slice mode in prev frame produced fewer slices than allocated),
+               // the previous SetEventOnCompletion registration remains orphaned inside the ID3D12Fence.
+               // CloseHandle on the event handle (in destroy_fence) does NOT unregister it.
+               // CPU-signal to (new_value - 1) to flush any stale registration without
+               // satisfying the upcoming new one.
+               // At this point, the previous frame is guaranteed to be completed since when
+               // reusing current_metadata_slot, we only pick slots for frames that are already
+               // fully completed signaled (i.e. completed) as per the logic in d3d12_video_encoder_begin_frame.
+               hr = pD3D12Enc->m_spEncodedFrameMetadata[current_metadata_slot].pspSubregionFences[i]->Signal(
+                  pD3D12Enc->m_spEncodedFrameMetadata[current_metadata_slot].ppSubregionFenceValues[i] - 1);
+               if (FAILED(hr)) {
+                  debug_printf("ID3D12Fence::Signal failed with HR %x\n", (unsigned)hr);
+                  pD3D12Enc->m_inflightResourcesPool[d3d12_video_encoder_pool_current_index(pD3D12Enc)].encode_result = PIPE_VIDEO_FEEDBACK_METADATA_ENCODE_FLAG_FAILED;
+                  pD3D12Enc->m_spEncodedFrameMetadata[d3d12_video_encoder_metadata_current_index(pD3D12Enc)].encode_result = PIPE_VIDEO_FEEDBACK_METADATA_ENCODE_FLAG_FAILED;
+                  assert(false);
+                  return;
+               }
+            }
             pD3D12Enc->m_spEncodedFrameMetadata[current_metadata_slot].ppSubregionFences[i] = pD3D12Enc->m_spEncodedFrameMetadata[current_metadata_slot].pspSubregionFences[i].Get();
 
             pD3D12Enc->m_spEncodedFrameMetadata[current_metadata_slot].pSubregionPipeFences[i].reset(
@@ -4728,21 +4765,18 @@ d3d12_video_encoder_get_feedback(struct pipe_video_codec *codec,
             //
             // Flush copies in batch and wait on this CPU thread for GPU work completion
             //
-
-            if (!d3d12_buffer_maps_directly(pD3D12Enc->m_spEncodedFrameMetadata[current_metadata_slot].comp_bit_destinations[0/*first slice*/])) { // If the buffer maps directly, the buffer_subdata is synchronous on unmap, no need to flush
-               struct pipe_fence_handle *pUploadGPUCompletionFence = NULL;
-               pD3D12Enc->base.context->flush(pD3D12Enc->base.context,
-                                             &pUploadGPUCompletionFence,
-                                             PIPE_FLUSH_ASYNC | PIPE_FLUSH_HINT_FINISH);
-               assert(pUploadGPUCompletionFence);
-               pD3D12Enc->m_pD3D12Screen->base.fence_finish(&pD3D12Enc->m_pD3D12Screen->base,
-                                                            NULL,
-                                                            pUploadGPUCompletionFence,
-                                                            OS_TIMEOUT_INFINITE);
-               pD3D12Enc->m_pD3D12Screen->base.fence_reference(&pD3D12Enc->m_pD3D12Screen->base,
-                                                               &pUploadGPUCompletionFence,
-                                                               NULL);
-            }
+            struct pipe_fence_handle *pUploadGPUCompletionFence = NULL;
+            pD3D12Enc->base.context->flush(pD3D12Enc->base.context,
+                                          &pUploadGPUCompletionFence,
+                                          PIPE_FLUSH_ASYNC | PIPE_FLUSH_HINT_FINISH);
+            assert(pUploadGPUCompletionFence);
+            pD3D12Enc->m_pD3D12Screen->base.fence_finish(&pD3D12Enc->m_pD3D12Screen->base,
+                                                         NULL,
+                                                         pUploadGPUCompletionFence,
+                                                         OS_TIMEOUT_INFINITE);
+            pD3D12Enc->m_pD3D12Screen->base.fence_reference(&pD3D12Enc->m_pD3D12Screen->base,
+                                                            &pUploadGPUCompletionFence,
+                                                            NULL);
          }
       }
 
@@ -4830,6 +4864,18 @@ d3d12_video_encoder_get_feedback(struct pipe_video_codec *codec,
          opt_metadata.codec_unit_metadata[i].offset,
          i,
          opt_metadata.codec_unit_metadata[i].size);
+   }
+
+   if ((pD3D12Enc->m_spEncodedFrameMetadata[current_metadata_slot].SubregionNotificationMode == D3D12_VIDEO_ENCODER_COMPRESSED_BITSTREAM_NOTIFICATION_MODE_FULL_FRAME) &&
+       (*output_buffer_size >= pD3D12Enc->m_spEncodedFrameMetadata[current_metadata_slot].comp_bit_destinations[0/*first slice*/]->width0))
+   {
+      debug_printf("[d3d12_video_encoder_get_feedback] Warning: Encoded bitstream size %d exceeds the allocated output buffer size %d\n",
+         *output_buffer_size,
+         pD3D12Enc->m_spEncodedFrameMetadata[current_metadata_slot].comp_bit_destinations[0/*first slice*/]->width0);
+      opt_metadata.encode_result |= PIPE_VIDEO_FEEDBACK_METADATA_ENCODE_FLAG_MAX_FRAME_SIZE_OVERFLOW;
+      if (pMetadata)
+         *pMetadata = opt_metadata;
+      assert(false);
    }
 
    pD3D12Enc->m_spEncodedFrameMetadata[current_metadata_slot].bRead = true;

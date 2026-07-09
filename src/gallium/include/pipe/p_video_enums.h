@@ -36,8 +36,7 @@ enum pipe_video_format
 {
    PIPE_VIDEO_FORMAT_UNKNOWN = 0,
    PIPE_VIDEO_FORMAT_MPEG12,   /**< MPEG1, MPEG2 */
-   PIPE_VIDEO_FORMAT_MPEG4,    /**< DIVX, XVID */
-   PIPE_VIDEO_FORMAT_VC1,      /**< WMV */
+   PIPE_VIDEO_FORMAT_VC1 = 3,  /**< WMV */
    PIPE_VIDEO_FORMAT_MPEG4_AVC,/**< H.264 */
    PIPE_VIDEO_FORMAT_HEVC,     /**< H.265 */
    PIPE_VIDEO_FORMAT_JPEG,     /**< JPEG */
@@ -51,8 +50,6 @@ enum pipe_video_profile
    PIPE_VIDEO_PROFILE_MPEG1,
    PIPE_VIDEO_PROFILE_MPEG2_SIMPLE,
    PIPE_VIDEO_PROFILE_MPEG2_MAIN,
-   PIPE_VIDEO_PROFILE_MPEG4_SIMPLE,
-   PIPE_VIDEO_PROFILE_MPEG4_ADVANCED_SIMPLE,
    PIPE_VIDEO_PROFILE_VC1_SIMPLE,
    PIPE_VIDEO_PROFILE_VC1_MAIN,
    PIPE_VIDEO_PROFILE_VC1_ADVANCED,
@@ -475,6 +472,8 @@ enum pipe_video_cap_slice_structure
    *  for all slices except for the last one, which must be equal or smaller
    *  to the previous slices. */
    PIPE_VIDEO_CAP_SLICE_STRUCTURE_EQUAL_MULTI_ROWS = 0x00000020,
+   /* Driver supports PIPE_VIDEO_SLICE_MODE_AUTO. */
+   PIPE_VIDEO_CAP_SLICE_STRUCTURE_AUTO = 0x00000040,
 };
 
 enum pipe_video_enc_intra_refresh_mode

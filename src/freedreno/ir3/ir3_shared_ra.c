@@ -569,7 +569,7 @@ try_demote_instruction(struct ra_ctx *ctx, struct ir3_instruction *instr)
          struct ra_interval *src0_interval =
             (instr->srcs[0]->flags & IR3_REG_SSA) ? ra_interval_get(ctx, instr->srcs[0]->def) : NULL;
          struct ra_interval *src1_interval =
-            (instr->srcs[0]->flags & IR3_REG_SSA) ? ra_interval_get(ctx, instr->srcs[0]->def) : NULL;
+            (instr->srcs[1]->flags & IR3_REG_SSA) ? ra_interval_get(ctx, instr->srcs[1]->def) : NULL;
          if (!(src0_interval && src0_interval->spill_def) &&
              !(src1_interval && src1_interval->spill_def) &&
              !(instr->srcs[0]->flags & IR3_REG_IMMED) &&
@@ -668,8 +668,45 @@ free_space(struct ra_ctx *ctx, physreg_t start, unsigned size)
 }
 
 static physreg_t
+try_allocate_src_subreg(struct ra_ctx *ctx, struct ir3_register *reg,
+                        enum ir3_subreg_move subreg_move)
+{
+   assert(subreg_move != IR3_SUBREG_MOVE_NONE);
+
+   /* Subreg moves always write a half register. */
+   assert(reg_elem_size(reg) == 1);
+
+   struct ir3_register *src = reg->instr->srcs[0];
+   if (!ra_reg_is_src(src) || !(src->flags & IR3_REG_SHARED))
+      return ~0;
+
+   unsigned offset = subreg_move == IR3_SUBREG_MOVE_LOWER ? 0 : 1;
+   struct ra_interval *src_interval = ra_interval_get(ctx, src->def);
+   physreg_t src_physreg = ra_interval_get_physreg(src_interval) + offset;
+   unsigned file_size = reg_file_size(reg);
+   unsigned size = reg_size(reg);
+
+   if (src_physreg + size <= file_size &&
+       get_reg_specified(ctx, reg, src_physreg)) {
+      return src_physreg;
+   }
+
+   return ~0;
+}
+
+static physreg_t
 get_reg(struct ra_ctx *ctx, struct ir3_register *reg, bool src)
 {
+   /* For subreg moves (see ir3_is_subreg_move), try to allocate half of their
+    * full src for their dst. If this succeeds, the instruction can be removed.
+    */
+   enum ir3_subreg_move subreg_move = ir3_is_subreg_move(reg->instr);
+   if (subreg_move != IR3_SUBREG_MOVE_NONE) {
+      physreg_t src_reg = try_allocate_src_subreg(ctx, reg, subreg_move);
+      if (src_reg != (physreg_t)~0)
+         return src_reg;
+   }
+
    if (reg->merge_set && reg->merge_set->preferred_reg != (physreg_t)~0) {
       physreg_t preferred_reg =
          reg->merge_set->preferred_reg + reg->merge_set_offset;
@@ -811,6 +848,19 @@ can_demote_src(struct ir3_instruction *instr)
    case OPC_META_COLLECT:
       return false;
    case OPC_MOV:
+      if (instr->block->shader->compiler->info->props.has_salu_int_narrowing_quirk) {
+         /* Avoid demoting something that would cause narrowin integer
+          * conversion from GPR to uGPR:
+          */
+         if ((instr->cat1.dst_type != instr->cat1.src_type) &&
+             (type_size(instr->cat1.dst_type) <
+              type_size(instr->cat1.src_type)) &&
+             !type_float(instr->cat1.dst_type) &&
+             (instr->dsts[0]->flags & IR3_REG_SHARED)) {
+            return false;
+         }
+      }
+
       /* non-shared -> shared floating-point conversions and
        * 8-bit sign extension don't work.
        */
@@ -1196,7 +1246,9 @@ reload_live_outs(struct ra_ctx *ctx, struct ir3_block *block)
       struct ir3_register *reg = ctx->live->definitions[name];
 
       struct ra_interval *interval = &ctx->intervals[name];
-      if (!interval->interval.inserted) {
+      if (!interval->interval.inserted ||
+          (interval->spill_def &&
+           interval->physreg_start != interval->physreg_start_orig)) {
          d("reloading %d at end of backedge", reg->name);
 
          /* When this interval was spilled inside the loop, we probably chose a

@@ -319,7 +319,8 @@ dri2_allocate_textures(struct dri_context *ctx,
          if (drawable->textures[statt]) {
             templ.format = drawable->textures[statt]->format;
             templ.bind = drawable->textures[statt]->bind &
-                         ~(PIPE_BIND_SCANOUT | PIPE_BIND_SHARED);
+                         (PIPE_BIND_RENDER_TARGET | PIPE_BIND_BLENDABLE |
+                          PIPE_BIND_SAMPLER_VIEW);
             templ.nr_samples = drawable->stvis.samples;
             templ.nr_storage_samples = drawable->stvis.samples;
 
@@ -987,8 +988,6 @@ dri_create_image(struct dri_screen *screen,
    if (use & __DRI_IMAGE_USE_LINEAR)
       tex_usage |= PIPE_BIND_LINEAR;
    if (use & __DRI_IMAGE_USE_CURSOR) {
-      if (width != 64 || height != 64)
-         return NULL;
       tex_usage |= PIPE_BIND_CURSOR;
    }
    if (use & __DRI_IMAGE_USE_PROTECTED)
@@ -1098,6 +1097,16 @@ dri2_query_image_by_resource_handle(struct dri_image *image, int attrib, int *va
       whandle.type = WINSYS_HANDLE_TYPE_FD;
       break;
    case __DRI_IMAGE_ATTRIB_NUM_PLANES:
+      if (image->dri_fourcc) {
+         const struct dri2_format_mapping *map =
+            dri2_get_mapping_by_fourcc(image->dri_fourcc);
+
+         if (map) {
+            *value = util_format_get_num_planes(map->pipe_format);
+            return true;
+         }
+      }
+
       for (i = 0, tex = image->texture; tex; tex = tex->next)
          i++;
       *value = i;

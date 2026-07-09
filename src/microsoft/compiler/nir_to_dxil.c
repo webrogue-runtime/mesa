@@ -100,7 +100,6 @@ nir_options = {
    .lower_fmod = true,
    .lower_fpow = true,
    .lower_scmp = true,
-   .lower_ldexp = true,
    .lower_flrp16 = true,
    .lower_flrp32 = true,
    .lower_flrp64 = true,
@@ -1747,12 +1746,9 @@ get_tessellator_output_primitive(const struct shader_info *info)
       return DXIL_TESSELLATOR_OUTPUT_PRIMITIVE_POINT;
    if (info->tess._primitive_mode == TESS_PRIMITIVE_ISOLINES)
       return DXIL_TESSELLATOR_OUTPUT_PRIMITIVE_LINE;
-   /* Note: GL tessellation domain is inverted from D3D, which means triangle
-    * winding needs to be inverted.
-    */
    if (info->tess.ccw)
-      return DXIL_TESSELLATOR_OUTPUT_PRIMITIVE_TRIANGLE_CW;
-   return DXIL_TESSELLATOR_OUTPUT_PRIMITIVE_TRIANGLE_CCW;
+      return DXIL_TESSELLATOR_OUTPUT_PRIMITIVE_TRIANGLE_CCW;
+   return DXIL_TESSELLATOR_OUTPUT_PRIMITIVE_TRIANGLE_CW;
 }
 
 static const struct dxil_mdnode *
@@ -2275,7 +2271,7 @@ emit_binop(struct ntd_context *ctx, nir_alu_instr *alu,
    bool is_float_op = nir_alu_type_get_base_type(nir_op_infos[alu->op].output_type) == nir_type_float;
 
    enum dxil_opt_flags flags = 0;
-   if (is_float_op && !alu->exact)
+   if (is_float_op && !nir_alu_instr_is_exact(alu))
       flags |= DXIL_UNSAFE_ALGEBRA;
 
    const struct dxil_value *v = dxil_emit_binop(&ctx->mod, opcode, op0, op1, flags);
@@ -2718,15 +2714,8 @@ emit_b2f64(struct ntd_context *ctx, nir_alu_instr *alu, const struct dxil_value 
 }
 
 static bool
-emit_f16tof32(struct ntd_context *ctx, nir_alu_instr *alu, const struct dxil_value *val, bool shift)
+emit_f16tof32(struct ntd_context *ctx, nir_alu_instr *alu, const struct dxil_value *val)
 {
-   if (shift) {
-      val = dxil_emit_binop(&ctx->mod, DXIL_BINOP_LSHR, val,
-         dxil_module_get_int32_const(&ctx->mod, 16), 0);
-      if (!val)
-         return false;
-   }
-
    const struct dxil_func *func = dxil_get_function(&ctx->mod,
                                                     "dx.op.legacyF16ToF32",
                                                     DXIL_NONE);
@@ -3015,8 +3004,7 @@ emit_alu(struct ntd_context *ctx, nir_alu_instr *alu)
    case nir_op_ubfe: return emit_tertiary_intin(ctx, alu, DXIL_INTR_UBFE, src[2], src[1], src[0]);
    case nir_op_bitfield_insert: return emit_bitfield_insert(ctx, alu, src[0], src[1], src[2], src[3]);
 
-   case nir_op_unpack_half_2x16_split_x: return emit_f16tof32(ctx, alu, src[0], false);
-   case nir_op_unpack_half_2x16_split_y: return emit_f16tof32(ctx, alu, src[0], true);
+   case nir_op_unpack_half_x_dxil: return emit_f16tof32(ctx, alu, src[0]);
    case nir_op_pack_half_2x16_split: return emit_f32tof16(ctx, alu, src[0], src[1]);
 
    case nir_op_sdot_4x8_iadd: return emit_dot4add_packed(ctx, alu, DXIL_INTR_DOT4_ADD_I8_PACKED, src[0], src[1], src[2]);
@@ -4482,11 +4470,11 @@ emit_load_vulkan_descriptor(struct ntd_context *ctx, nir_intrinsic_instr *intr)
    enum dxil_resource_class resource_class;
    enum dxil_resource_kind resource_kind;
    switch (nir_intrinsic_desc_type(intr)) {
-   case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
+   case nir_descriptor_type_uniform_buffer:
       resource_class = DXIL_RESOURCE_CLASS_CBV;
       resource_kind = DXIL_RESOURCE_KIND_CBUFFER;
       break;
-   case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+   case nir_descriptor_type_storage_buffer:
       resource_class = DXIL_RESOURCE_CLASS_UAV;
       resource_kind = DXIL_RESOURCE_KIND_RAW_BUFFER;
       break;
@@ -6636,6 +6624,8 @@ nir_to_dxil(struct nir_shader *s, const struct nir_to_dxil_options *opts,
    NIR_PASS(_, s, nir_lower_frexp);
    NIR_PASS(_, s, nir_lower_flrp, 16 | 32 | 64, true);
    NIR_PASS(_, s, nir_lower_io, nir_var_shader_in | nir_var_shader_out, type_size_vec4, nir_lower_io_lower_64bit_to_32);
+   s->info.disable_input_offset_src_constant_folding = true;
+   s->info.disable_output_offset_src_constant_folding = true;
    NIR_PASS(_, s, dxil_nir_ensure_position_writes);
    NIR_PASS(_, s, dxil_nir_lower_system_values);
    NIR_PASS(_, s, nir_lower_io_to_scalar, nir_var_shader_in | nir_var_system_value | nir_var_shader_out, NULL, NULL);

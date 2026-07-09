@@ -492,7 +492,7 @@ search_drawpixels_cache(struct st_context *st,
             continue;
 
          /* check if the pixel data is the same */
-         if (memcmp(pixels, entry->image, width * height * bpp) == 0) {
+         if (memcmp(pixels, entry->image, (size_t)width * height * bpp) == 0) {
             /* Success - found a cache match */
             pipe_resource_reference(&pt, entry->texture);
             /* refcount of returned texture should be at least two here.  One
@@ -556,6 +556,7 @@ cache_drawpixels_image(struct st_context *st,
       const GLint bpp = _mesa_bytes_per_pixel(format, type);
       struct drawpix_cache_entry *entry =
          find_oldest_drawpixels_cache_entry(st);
+      const size_t n_bytes = (size_t)width * height * bpp;
       assert(entry);
       entry->width = width;
       entry->height = height;
@@ -565,9 +566,9 @@ cache_drawpixels_image(struct st_context *st,
              sizeof(struct gl_pixelmaps));
       entry->user_pointer = pixels;
       free(entry->image);
-      entry->image = malloc(width * height * bpp);
+      entry->image = malloc(n_bytes);
       if (entry->image) {
-         memcpy(entry->image, pixels, width * height * bpp);
+         memcpy(entry->image, pixels, n_bytes);
          pipe_resource_reference(&entry->texture, pt);
          entry->age = ++st->drawpix_cache.age;
       }
@@ -730,7 +731,7 @@ draw_textured_quad(struct gl_context *ctx, GLint x, GLint y, GLfloat z,
    ASSERTED GLsizei maxSize;
    bool normalized = sv[0]->texture->target == PIPE_TEXTURE_2D ||
                      (sv[0]->texture->target == PIPE_TEXTURE_RECT && st->lower_rect_tex);
-   unsigned cso_state_mask;
+   unsigned invalidate_flags;
 
    assert(sv[0]->texture->target == st->internal_target);
 
@@ -742,18 +743,22 @@ draw_textured_quad(struct gl_context *ctx, GLint x, GLint y, GLfloat z,
    assert(width <= maxSize);
    assert(height <= maxSize);
 
-   cso_state_mask = (CSO_BIT_RASTERIZER |
-                     CSO_BIT_VIEWPORT |
-                     CSO_BIT_FRAGMENT_SAMPLERS |
-                     CSO_BIT_STREAM_OUTPUTS |
-                     CSO_BIT_VERTEX_ELEMENTS |
-                     CSO_BIT_MESH_SHADER |
-                     CSO_BITS_VERTEX_PIPE_SHADERS);
+   invalidate_flags = (ST_INVALIDATE_RASTERIZER |
+                       ST_INVALIDATE_VIEWPORT |
+                       ST_INVALIDATE_FS_SAMPLERS |
+                       ST_INVALIDATE_VERTEX_BUFFERS |
+                       ST_INVALIDATE_MESH_STATE |
+                       ST_INVALIDATE_VS_STATE |
+                       ST_INVALIDATE_FS_STATE |
+                       ST_INVALIDATE_GS_STATE |
+                       ST_INVALIDATE_TCS_STATE |
+                       ST_INVALIDATE_TES_STATE);
    if (write_stencil) {
-      cso_state_mask |= (CSO_BIT_DEPTH_STENCIL_ALPHA |
-                         CSO_BIT_BLEND);
+      invalidate_flags |= (ST_INVALIDATE_DSA |
+                           ST_INVALIDATE_BLEND);
    }
-   cso_save_state(cso, cso_state_mask);
+   /* Save only states that have no st_atom — they can't be re-derived. */
+   cso_save_state(cso, CSO_BIT_STREAM_OUTPUTS);
 
    /* rasterizer state: just scissor */
    {
@@ -922,15 +927,16 @@ draw_textured_quad(struct gl_context *ctx, GLint x, GLint y, GLfloat z,
       }
    }
 
-   /* restore state */
-   /* Unbind all because st/mesa won't do it if the current shader doesn't
-    * use them.
+   /* Unbind sampler views bound directly on the pipe.
+    * Restore atomless states (stream outputs) via CSO.
     */
    cso_restore_state(cso, CSO_UNBIND_FS_SAMPLERVIEWS);
    st->state.num_sampler_views[MESA_SHADER_FRAGMENT] = 0;
 
-   ctx->Array.NewVertexElements = true;
-   ST_SET_STATE2(ctx->NewDriverState, ST_NEW_VERTEX_ARRAYS, ST_NEW_FS_SAMPLER_VIEWS);
+   /* Invalidate all states this meta-op modified. The atoms will
+    * re-derive them from GL state before the next draw.
+    */
+   st_context_invalidate_state(st, invalidate_flags);
 }
 
 
@@ -1410,7 +1416,7 @@ copy_stencil_pixels(struct gl_context *ctx, GLint srcx, GLint srcy,
    uint8_t *buffer;
    int i;
 
-   buffer = malloc(width * height * sizeof(uint8_t));
+   buffer = malloc((size_t)width * height * sizeof(uint8_t));
    if (!buffer) {
       _mesa_error(ctx, GL_OUT_OF_MEMORY, "glCopyPixels(stencil)");
       return;

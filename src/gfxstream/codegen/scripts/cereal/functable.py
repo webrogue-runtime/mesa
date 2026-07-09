@@ -24,6 +24,8 @@ RESOURCE_TRACKER_ENTRIES = [
     "vkDestroyBuffer",
     "vkGetBufferMemoryRequirements",
     "vkGetBufferMemoryRequirements2",
+    "vkGetPhysicalDeviceProperties2",
+    "vkGetPhysicalDeviceProperties2KHR",
     "vkCreateSemaphore",
     "vkDestroySemaphore",
     "vkQueueSubmit",
@@ -145,6 +147,7 @@ NON_AUTOGEN_ENTRYPOINTS = [
     "vkCreateImageWithRequirementsGOOGLE",
     "vkCreateBufferWithRequirementsGOOGLE",
     "vkGetMemoryHostAddressInfoGOOGLE",
+    "vkGetPhysicalDeviceProperties2",
     "vkFreeMemorySyncGOOGLE",
     "vkQueueHostSyncGOOGLE",
     "vkQueueSubmitAsyncGOOGLE",
@@ -162,6 +165,7 @@ NON_AUTOGEN_ENTRYPOINTS = [
     "vkQueueSubmitAsync2GOOGLE",
     "vkGetSemaphoreGOOGLE",
     "vkTraceAsyncGOOGLE",
+    "vkSetDebugMetadataAsyncGOOGLE",
 ]
 
 # Handles that need to be translated to/from their corresponding gfxstream object types

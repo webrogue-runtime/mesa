@@ -297,6 +297,10 @@ validate_alu_instr(nir_alu_instr *instr, validate_state *state)
    }
 
    validate_def(&instr->def, state);
+
+   validate_assert(state, (instr->fp_math_ctrl & ~nir_op_infos[instr->op].valid_fp_math_ctrl) == 0);
+   validate_assert(state, nir_alu_instr_no_transform(instr) || !nir_alu_instr_no_contract(instr));
+   validate_assert(state, nir_alu_instr_no_transform(instr) || !nir_alu_instr_no_reassoc(instr));
 }
 
 static void
@@ -328,10 +332,23 @@ validate_deref_instr(nir_deref_instr *instr, validate_state *state)
 
       nir_deref_instr *parent = nir_src_as_deref(instr->parent);
       if (parent) {
-         /* Casts can change the mode but it can't change completely.  The new
-          * mode must have some bits in common with the old.
-          */
-         validate_assert(state, instr->modes & parent->modes);
+         if (parent->modes & nir_var_resource_heap) {
+            /* Some casts from the resource heap pointer are allowed. */
+            validate_assert(state, instr->modes & (nir_var_resource_heap |
+                                                   nir_var_image |
+                                                   nir_var_uniform |
+                                                   nir_var_mem_ubo |
+                                                   nir_var_mem_ssbo));
+         } else if (parent->modes & nir_var_sampler_heap) {
+            /* Some casts from the sampler heap pointer are allowed. */
+            validate_assert(state, instr->modes & (nir_var_sampler_heap |
+                                                   nir_var_uniform));
+         } else {
+            /* Casts can change the mode but it can't change completely. The
+             * new mode must have some bits in common with the old.
+             */
+            validate_assert(state, instr->modes & parent->modes);
+         }
       } else {
          /* If our parent isn't a deref, just assert the mode is there */
          validate_assert(state, instr->modes != 0);
@@ -655,10 +672,7 @@ validate_intrinsic_instr(nir_intrinsic_instr *instr, validate_state *state)
    case nir_intrinsic_store_output:
    case nir_intrinsic_store_per_vertex_output:
    case nir_intrinsic_store_per_view_output:
-      if (state->shader->info.stage == MESA_SHADER_FRAGMENT)
-         validate_assert(state, nir_src_bit_size(instr->src[0]) >= 8);
-      else
-         validate_assert(state, nir_src_bit_size(instr->src[0]) >= 16);
+      validate_assert(state, nir_src_bit_size(instr->src[0]) >= 8);
       validate_assert(state,
                       nir_src_bit_size(instr->src[0]) ==
                          nir_alu_type_get_type_size(nir_intrinsic_src_type(instr)));
@@ -675,7 +689,9 @@ validate_intrinsic_instr(nir_intrinsic_instr *instr, validate_state *state)
    case nir_intrinsic_bindless_image_atomic:
    case nir_intrinsic_bindless_image_atomic_swap:
    case nir_intrinsic_image_atomic:
-   case nir_intrinsic_image_atomic_swap: {
+   case nir_intrinsic_image_atomic_swap:
+   case nir_intrinsic_image_heap_atomic:
+   case nir_intrinsic_image_heap_atomic_swap: {
       nir_atomic_op op = nir_intrinsic_atomic_op(instr);
 
       enum pipe_format format = image_intrin_format(instr);
@@ -708,6 +724,16 @@ validate_intrinsic_instr(nir_intrinsic_instr *instr, validate_state *state)
       break;
    }
 
+   case nir_intrinsic_load_buffer_amd:
+      if (nir_intrinsic_access(instr) & ACCESS_USES_FORMAT_AMD) {
+         nir_alu_type dest_type = nir_intrinsic_dest_type(instr);
+         validate_assert(state, nir_alu_type_get_type_size(dest_type) &&
+                                nir_alu_type_get_base_type(dest_type));
+         validate_assert(state, nir_alu_type_get_type_size(dest_type) ==
+                                instr->def.bit_size);
+      }
+      break;
+
    case nir_intrinsic_store_buffer_amd:
       if (nir_intrinsic_access(instr) & ACCESS_USES_FORMAT_AMD) {
          unsigned writemask = nir_intrinsic_write_mask(instr);
@@ -718,6 +744,39 @@ validate_intrinsic_instr(nir_intrinsic_instr *instr, validate_state *state)
                             BITFIELD_MASK(nir_src_num_components(instr->src[0])));
       }
       break;
+
+   case nir_intrinsic_global_atomic_nv:
+   case nir_intrinsic_global_atomic_swap_nv:
+   case nir_intrinsic_shared_atomic_nv:
+   case nir_intrinsic_shared_atomic_swap_nv:
+   case nir_intrinsic_ldc_nv:
+   case nir_intrinsic_ldcx_nv:
+   case nir_intrinsic_load_global_nv:
+   case nir_intrinsic_load_scratch_nv:
+   case nir_intrinsic_load_shared_nv:
+   case nir_intrinsic_store_global_nv:
+   case nir_intrinsic_store_scratch_nv:
+   case nir_intrinsic_store_shared_nv:
+   case nir_intrinsic_store_shared_unlock_nv:
+   case nir_intrinsic_vild_nv: {
+      int base = nir_intrinsic_base(instr);
+      nir_src src = *nir_get_io_offset_src(instr);
+      unsigned const_bits = nir_get_io_base_size_nv(instr);
+
+      if (nir_src_is_const(src) && nir_src_as_int(src) == 0) {
+         validate_assert(state, base >= 0 && base < BITFIELD_MASK(const_bits));
+      } else {
+         int32_t max = BITFIELD_MASK(const_bits - 1);
+         int32_t min = ~BITFIELD_MASK(const_bits - 1);
+         validate_assert(state, base >= min && base < max);
+      }
+
+      if (instr->intrinsic == nir_intrinsic_load_global_nv) {
+         validate_assert(state, instr->src[1].ssa->bit_size == 1);
+      }
+
+      break;
+   }
 
    default:
       break;
@@ -766,9 +825,9 @@ validate_intrinsic_instr(nir_intrinsic_instr *instr, validate_state *state)
    if (nir_intrinsic_has_io_xfb(instr)) {
       unsigned used_mask = 0;
 
+      nir_io_xfb xfb = nir_intrinsic_io_xfb(instr);
       for (unsigned i = 0; i < 4; i++) {
-         nir_io_xfb xfb = i < 2 ? nir_intrinsic_io_xfb(instr) : nir_intrinsic_io_xfb2(instr);
-         unsigned xfb_mask = BITFIELD_RANGE(i, xfb.out[i % 2].num_components);
+         unsigned xfb_mask = BITFIELD_RANGE(i, xfb.out[i].num_components);
 
          /* Each component can be used only once by transform feedback info. */
          validate_assert(state, (xfb_mask & used_mask) == 0);
@@ -857,7 +916,7 @@ validate_intrinsic_instr(nir_intrinsic_instr *instr, validate_state *state)
                             (state->shader->info.stage == MESA_SHADER_FRAGMENT &&
                              instr->intrinsic == nir_intrinsic_load_input_vertex));
 
-         /* Non-zero src offset with num_slots == 1 is disallowed. */
+         /* Non-constant src offset with num_slots == 1 is disallowed. */
          if (sem.num_slots == 1) {
             nir_src *offset_src = nir_get_io_offset_src(instr);
 
@@ -889,8 +948,7 @@ validate_intrinsic_instr(nir_intrinsic_instr *instr, validate_state *state)
              * So allow phis in offset_src with num_slots == 1 for now.
              */
             validate_assert(state,
-                            (nir_src_is_const(*offset_src) &&
-                             nir_src_as_uint(*offset_src) == 0) ||
+                            nir_src_is_const(*offset_src) ||
                             nir_def_is_phi(offset_src->ssa));
          }
       }
@@ -900,6 +958,11 @@ validate_intrinsic_instr(nir_intrinsic_instr *instr, validate_state *state)
        nir_intrinsic_has_align(instr)) {
       unsigned min_align = 1 << nir_intrinsic_offset_shift(instr);
       validate_assert(state, nir_intrinsic_align(instr) >= min_align);
+   }
+
+   if (nir_intrinsic_has_offset_shift_nv(instr)) {
+      unsigned shift = nir_intrinsic_offset_shift_nv(instr);
+      validate_assert(state, shift == 0 || (shift >= 2 && shift <= 4));
    }
 }
 
@@ -979,10 +1042,13 @@ validate_tex_instr(nir_tex_instr *instr, validate_state *state)
 
       case nir_tex_src_ddx:
       case nir_tex_src_ddy:
-         validate_assert(state, instr->op == nir_texop_txd);
+         validate_assert(state,
+                         instr->op == nir_texop_txd ||
+                            instr->op == nir_texop_sparse_residency_intel);
          break;
 
-      case nir_tex_src_texture_deref: {
+      case nir_tex_src_texture_deref:
+      case nir_tex_src_texture_2_deref: {
          nir_deref_instr *deref = nir_src_as_deref(instr->src[i].src);
          if (!validate_assert(state, deref))
             break;
@@ -991,7 +1057,8 @@ validate_tex_instr(nir_tex_instr *instr, validate_state *state)
          break;
       }
 
-      case nir_tex_src_sampler_deref: {
+      case nir_tex_src_sampler_deref:
+      case nir_tex_src_sampler_2_deref: {
          nir_deref_instr *deref = nir_src_as_deref(instr->src[i].src);
          if (!validate_assert(state, deref))
             break;
@@ -1017,7 +1084,18 @@ validate_tex_instr(nir_tex_instr *instr, validate_state *state)
          break;
       }
 
+      case nir_tex_src_block_size:
+         validate_assert(state,
+                         instr->op == nir_texop_block_match_sad_qcom ||
+                         instr->op == nir_texop_block_match_ssd_qcom);
+         break;
+
+      case nir_tex_src_box_size:
+         validate_assert(state, instr->op == nir_texop_box_filter_qcom);
+         break;
+
       case nir_tex_src_coord:
+      case nir_tex_src_ref_coord:
       case nir_tex_src_projector:
       case nir_tex_src_offset:
       case nir_tex_src_min_lod:
@@ -1027,6 +1105,8 @@ validate_tex_instr(nir_tex_instr *instr, validate_state *state)
       case nir_tex_src_plane:
       case nir_tex_src_texture_handle:
       case nir_tex_src_sampler_handle:
+      case nir_tex_src_texture_2_handle:
+      case nir_tex_src_sampler_2_handle:
          break;
 
       default:
@@ -1151,7 +1231,7 @@ validate_phi_instr(nir_phi_instr *instr, validate_state *state)
 
    exec_list_validate(&instr->srcs);
    validate_assert(state, exec_list_length(&instr->srcs) ==
-                             state->block->predecessors.entries);
+                             nir_block_num_preds(state->block));
 }
 
 static void
@@ -1187,8 +1267,11 @@ validate_jump_instr(nir_jump_instr *instr, validate_state *state)
       validate_assert(state, state->impl->structured);
       validate_assert(state, state->loop != NULL);
       if (state->loop) {
-         nir_block *cont_block = nir_loop_continue_target(state->loop);
-         validate_assert(state, block->successors[0] == cont_block);
+         validate_assert(state, nir_loop_has_continue_construct(state->loop));
+         if (nir_loop_has_continue_construct(state->loop)) {
+            nir_block *cont_block = nir_loop_first_continue_block(state->loop);
+            validate_assert(state, block->successors[0] == cont_block);
+         }
       }
       validate_assert(state, block->successors[1] == NULL);
       validate_assert(state, instr->target == NULL);
@@ -1393,18 +1476,30 @@ validate_block_predecessors(nir_block *block, validate_state *state)
                                               block->successors[i]));
 
       /* And we have to be in our successor's predecessors set */
-      validate_assert(state,
-                      _mesa_set_search(&block->successors[i]->predecessors, block));
+      bool has_pred = false;
+      nir_foreach_pred(pred, block->successors[i])
+         has_pred |= pred == block;
+      validate_assert(state, has_pred);
 
       validate_phi_srcs(block, block->successors[i], state);
    }
 
    /* The start block cannot have any predecessors */
    if (block == nir_start_block(state->impl))
-      validate_assert(state, block->predecessors.entries == 0);
+      validate_assert(state, nir_block_num_preds(block) == 0);
 
-   set_foreach(&block->predecessors, entry) {
-      const nir_block *pred = entry->key;
+   /* Check for duplicate predecessors. */
+   nir_foreach_pred(pred, block) {
+      bool found = false;
+      nir_foreach_pred(pred2, block) {
+         if (pred == pred2) {
+            validate_assert(state, !found);
+            found = true;
+         }
+      }
+   }
+
+   nir_foreach_pred(pred, block) {
       validate_assert(state, _mesa_set_search(state->blocks, pred));
       validate_assert(state, pred->successors[0] == block ||
                                 pred->successors[1] == block);
@@ -1439,14 +1534,13 @@ validate_block(nir_block *block, validate_state *state)
       if (next == NULL) {
          switch (state->parent_node->type) {
          case nir_cf_node_loop: {
-            if (block == nir_loop_last_block(state->loop)) {
-               nir_block *cont = nir_loop_continue_target(state->loop);
-               validate_assert(state, block->successors[0] == cont);
+            if (!nir_loop_has_continue_construct(state->loop) ||
+                block == nir_loop_last_continue_block(state->loop)) {
+               nir_block *header = nir_loop_first_block(state->loop);
+               validate_assert(state, block->successors[0] == header);
             } else {
-               validate_assert(state, nir_loop_has_continue_construct(state->loop) &&
-                                         block == nir_loop_last_continue_block(state->loop));
-               nir_block *head = nir_loop_first_block(state->loop);
-               validate_assert(state, block->successors[0] == head);
+               nir_block *cont = nir_loop_first_continue_block(state->loop);
+               validate_assert(state, block->successors[0] == cont);
             }
             /* due to the hack for infinite loops, block->successors[1] may
              * point to the block after the loop.
@@ -1553,6 +1647,7 @@ validate_loop(nir_loop *loop, validate_state *state)
    validate_assert(state, next_node->type == nir_cf_node_block);
 
    validate_assert(state, !exec_list_is_empty(&loop->body));
+   validate_assert(state, nir_block_num_preds(nir_loop_first_block(loop)) <= 2);
 
    nir_cf_node *old_parent = state->parent_node;
    state->parent_node = &loop->cf_node;
@@ -2287,7 +2382,9 @@ nir_validate_shader(nir_shader *shader, const char *when)
       nir_var_mem_pixel_local_in |
       nir_var_mem_pixel_local_out |
       nir_var_mem_pixel_local_inout |
-      nir_var_image;
+      nir_var_image |
+      nir_var_resource_heap |
+      nir_var_sampler_heap;
 
    if (mesa_shader_stage_is_callable(shader->info.stage))
       valid_modes |= nir_var_shader_call_data;

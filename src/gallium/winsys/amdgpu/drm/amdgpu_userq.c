@@ -7,7 +7,9 @@
 #include "amdgpu_bo.h"
 #include "amdgpu_cs.h"
 #include "ac_linux_drm.h"
+#include "ac_pm4.h"
 #include "sid.h"
+#include "util/log.h"
 
 static void
 update_vm_timeline_point_to_wait(uint64_t *vm_timeline_point_to_wait, struct pb_buffer_lean *_buf)
@@ -28,7 +30,8 @@ static bool
 amdgpu_userq_ring_init(struct amdgpu_winsys *aws, struct amdgpu_userq *userq,
                        uint64_t *vm_timeline_point_to_wait)
 {
-   /* Allocate ring and user fence in one buffer. */
+   /* Allocate ring and user fence in one buffer. Also allocate for wait packet debug count
+    * variable. */
    uint32_t gtt_bo_size = AMDGPU_USERQ_RING_SIZE + aws->info.gart_page_size;
    userq->gtt_bo = amdgpu_bo_create(aws, gtt_bo_size, 256, RADEON_DOMAIN_GTT,
                                     RADEON_FLAG_GL2_BYPASS | RADEON_FLAG_NO_INTERPROCESS_SHARING);
@@ -58,6 +61,12 @@ amdgpu_userq_ring_init(struct amdgpu_winsys *aws, struct amdgpu_userq *userq,
    *userq->wptr_bo_map = 0;
    userq->next_wptr = 0;
 
+   userq->write_data_pkt_dbg_count_ptr = (uint64_t*)(userq->gtt_bo_map +
+                                                     AMDGPU_USERQ_RING_SIZE + 8);
+   userq->write_data_pkt_dbg_count_va = amdgpu_bo_get_va(userq->gtt_bo) +
+                                                     AMDGPU_USERQ_RING_SIZE + 8;
+   *userq->write_data_pkt_dbg_count_ptr = 0;
+
    /* Allocate memory for rptr. */
    userq->vram_bo = amdgpu_bo_create(aws, aws->info.gart_page_size, 256, RADEON_DOMAIN_VRAM,
                                      RADEON_FLAG_CLEAR_VRAM | RADEON_FLAG_GL2_BYPASS |
@@ -69,6 +78,45 @@ amdgpu_userq_ring_init(struct amdgpu_winsys *aws, struct amdgpu_userq *userq,
    update_vm_timeline_point_to_wait(vm_timeline_point_to_wait, userq->vram_bo);
    userq->rptr_va = amdgpu_bo_get_va(userq->vram_bo);
    return true;
+}
+
+static void *
+userq_job_log_thread(void *data)
+{
+   struct amdgpu_winsys *aws = data;
+   struct amdgpu_userq *userq;
+
+   while (aws->userq_job_log) {
+      os_time_sleep(1000 * 700);
+      for (unsigned i = 0; i < AMDGPU_MAX_QUEUES; i++) {
+         userq = &aws->queues[i].userq;
+         if (userq->userq_handle) {
+            uint64_t last_submitted_job = *userq->wptr_bo_map;
+            uint64_t last_completed_job = *userq->user_fence_ptr;
+            uint64_t last_write_data_pkt_dbg_count = *userq->write_data_pkt_dbg_count_ptr;
+
+            if (userq->last_submitted_job != last_submitted_job ||
+                userq->last_completed_job != last_completed_job ||
+                userq->last_write_data_pkt_dbg_count != last_write_data_pkt_dbg_count) {
+               mesa_logi("amdgpu: uq_log: %s:  submitted_job=%llx  completed_job=%llx"
+                         " write_data_pkt_dbg_count=%llx\n", amdgpu_userq_str[i],
+                         (long long)last_submitted_job, (long long)last_completed_job,
+                         (long long)last_write_data_pkt_dbg_count);
+               userq->last_submitted_job = last_submitted_job;
+               userq->last_completed_job = last_completed_job;
+               userq->last_write_data_pkt_dbg_count = last_write_data_pkt_dbg_count;
+            }
+         }
+      }
+   }
+
+   return NULL;
+}
+
+void
+amdgpu_userq_start_job_log_thread(struct amdgpu_winsys *aws)
+{
+   pthread_create(&aws->userq_job_log_thread, NULL, userq_job_log_thread, aws);
 }
 
 void
@@ -96,7 +144,7 @@ amdgpu_userq_deinit(struct amdgpu_winsys *aws, struct amdgpu_userq *userq)
       radeon_bo_reference(&aws->dummy_sws.base, &userq->sdma_data.csa_bo, NULL);
       break;
    default:
-      fprintf(stderr, "amdgpu: userq unsupported for ip = %d\n", userq->ip_type);
+      mesa_loge("amdgpu: userq unsupported for ip = %d\n", userq->ip_type);
    }
 }
 
@@ -152,7 +200,8 @@ amdgpu_userq_init(struct amdgpu_winsys *aws, struct amdgpu_userq *userq, enum am
       break;
    case AMD_IP_COMPUTE:
       hw_ip_type = AMDGPU_HW_IP_COMPUTE;
-      userq->compute_data.eop_bo = amdgpu_bo_create(aws, aws->info.gart_page_size, 256,
+      userq->compute_data.eop_bo = amdgpu_bo_create(aws, aws->info.fw_based_mcbp.eop_size,
+                                                    aws->info.fw_based_mcbp.eop_alignment,
                                                     RADEON_DOMAIN_VRAM,
                                                     RADEON_FLAG_NO_INTERPROCESS_SHARING);
       if (!userq->compute_data.eop_bo)
@@ -164,8 +213,8 @@ amdgpu_userq_init(struct amdgpu_winsys *aws, struct amdgpu_userq *userq, enum am
       break;
    case AMD_IP_SDMA:
       hw_ip_type = AMDGPU_HW_IP_DMA;
-      userq->sdma_data.csa_bo = amdgpu_bo_create(aws, aws->info.fw_based_mcbp.csa_size,
-                                                 aws->info.fw_based_mcbp.csa_alignment,
+      userq->sdma_data.csa_bo = amdgpu_bo_create(aws, aws->info.fw_based_mcbp.sdma_csa_size,
+                                                 aws->info.fw_based_mcbp.sdma_csa_alignment,
                                                  RADEON_DOMAIN_VRAM,
                                                  RADEON_FLAG_NO_INTERPROCESS_SHARING);
       if (!userq->sdma_data.csa_bo)
@@ -176,7 +225,7 @@ amdgpu_userq_init(struct amdgpu_winsys *aws, struct amdgpu_userq *userq, enum am
       update_vm_timeline_point_to_wait(&vm_timeline_point_to_wait, userq->sdma_data.csa_bo);
       break;
    default:
-      fprintf(stderr, "amdgpu: userq unsupported for ip = %d\n", userq->ip_type);
+      mesa_loge("amdgpu: userq unsupported for ip = %d\n", userq->ip_type);
       goto fail;
    }
 
@@ -196,7 +245,7 @@ amdgpu_userq_init(struct amdgpu_winsys *aws, struct amdgpu_userq *userq, enum am
                                        INT64_MAX, DRM_SYNCOBJ_WAIT_FLAGS_WAIT_ALL |
                                           DRM_SYNCOBJ_WAIT_FLAGS_WAIT_FOR_SUBMIT, NULL);
    if (r) {
-      fprintf(stderr, "amdgpu: waiting for vm fences failed\n");
+      mesa_loge("amdgpu: waiting for vm fences failed\n");
       goto fail;
    }
 
@@ -220,7 +269,7 @@ amdgpu_userq_init(struct amdgpu_winsys *aws, struct amdgpu_userq *userq, enum am
    }
 
    if (r) {
-      fprintf(stderr, "amdgpu: failed to create userq\n");
+      mesa_loge("amdgpu: failed to create userq\n");
       goto fail;
    }
 
@@ -272,7 +321,7 @@ amdgpu_userq_submit_cs_preamble_ib_once(struct radeon_cmdbuf *rcs, struct ac_pm4
    amdgpu_pkt_add_dw(PKT3(PKT3_INDIRECT_BUFFER, 2, 0));
    amdgpu_pkt_add_dw(amdgpu_bo_get_va(userq->cs_preamble_ib_bo));
    amdgpu_pkt_add_dw(amdgpu_bo_get_va(userq->cs_preamble_ib_bo) >> 32);
-   amdgpu_pkt_add_dw(pm4->ndw | S_3F3_INHERIT_VMID_MQD_GFX(1));
+   amdgpu_pkt_add_dw(pm4->ndw | S_3F3_INHERIT_VMID_PFP(1));
    amdgpu_pkt_end();
 
    simple_mtx_unlock(&userq->lock);
@@ -319,7 +368,7 @@ amdgpu_userq_f32_init_reg_shadowing(struct radeon_cmdbuf *rcs, struct ac_pm4_sta
    amdgpu_pkt_add_dw(PKT3(PKT3_INDIRECT_BUFFER, 2, 0));
    amdgpu_pkt_add_dw(amdgpu_bo_get_va(userq->f32_shadowing_ib_bo));
    amdgpu_pkt_add_dw(amdgpu_bo_get_va(userq->f32_shadowing_ib_bo) >> 32);
-   amdgpu_pkt_add_dw(pm4->ndw | S_3F3_INHERIT_VMID_MQD_GFX(1));
+   amdgpu_pkt_add_dw(pm4->ndw | S_3F3_INHERIT_VMID_PFP(1));
    amdgpu_pkt_end();
 
    simple_mtx_unlock(&userq->lock);

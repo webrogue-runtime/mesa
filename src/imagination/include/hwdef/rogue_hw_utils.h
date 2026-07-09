@@ -92,12 +92,13 @@ rogue_get_isp_samples_per_tile_xy(const struct pvr_device_info *dev_info,
       if (samples_per_pixel == 2 || samples_per_pixel == 4)
          *x_out *= 2;
 
-      if (samples_per_pixel == 2)
+      if (samples_per_pixel == 4)
          *y_out *= 2;
 
       break;
    case 8:
-      *y_out *= 2;
+      if (samples_per_pixel == 2)
+         *y_out *= 2;
       break;
    default:
       assert(!"Unsupported number of samples");
@@ -261,6 +262,28 @@ rogue_get_render_size_max(const struct pvr_device_info *dev_info)
    rogue_get_render_size_max(dev_info)
 
 static inline uint32_t
+rogue_get_render_size_max_z(const struct pvr_device_info *dev_info)
+{
+   switch (dev_info->ident.arch) {
+   case PVR_DEVICE_ARCH_ROGUE:
+      return 2048;
+   default:
+      UNREACHABLE("unexpected arch");
+   }
+}
+
+static inline uint32_t
+rogue_get_texture_extent_max(const struct pvr_device_info *dev_info)
+{
+   switch (dev_info->ident.arch) {
+   case PVR_DEVICE_ARCH_ROGUE:
+      return 16384;
+   default:
+      UNREACHABLE("unexpected arch");
+   }
+}
+
+static inline uint32_t
 rogue_max_compute_shared_registers(const struct pvr_device_info *dev_info)
 {
    if (PVR_HAS_FEATURE(dev_info, compute))
@@ -316,7 +339,7 @@ rogue_get_compute_max_work_group_size(const struct pvr_device_info *dev_info)
     */
    const uint32_t max_tasks_per_usc = 16U;
 
-   if (!PVR_HAS_ERN(dev_info, 35421)) {
+   if (!PVR_HAS_ENHANCEMENT(dev_info, 35421)) {
       /* Barriers on work-groups > 32 instances aren't supported. */
       return ROGUE_MAX_INSTANCES_PER_TASK;
    }
@@ -455,6 +478,12 @@ rogue_max_wg_temps(const struct pvr_device_info *dev_info,
    return temps;
 }
 
+static inline uint32_t rogue_get_vtxins(void)
+{
+   /* TODO: use highest safe number of vertex input registers. */
+   return 12;
+}
+
 static inline uint32_t
 rogue_num_uscs_per_tile(const struct pvr_device_info *dev_info)
 {
@@ -472,5 +501,17 @@ static inline uint32_t rogue_usc_indexed_pixel_output_index_scale(
       return 4;
 
    return 1;
+}
+
+static inline uint32_t
+rogue_get_total_instance_count(const struct pvr_device_info *dev_info)
+{
+   /* Number of instances calculated as such:
+    * USC_SLOTS * INSTANCES_PER_SLOT * MAX_NUM_CORES * NUM_CLUSTERS
+    */
+   /* TODO: Optimise tile buffer size to use core_count, not max_num_cores. */
+   return rogue_get_max_total_instances(dev_info) *
+          rogue_get_max_num_cores(dev_info) *
+          PVR_GET_FEATURE_VALUE(dev_info, num_clusters, 1);
 }
 #endif /* ROGUE_HW_UTILS_H */

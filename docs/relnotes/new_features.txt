@@ -1,14 +1,10 @@
-VK_KHR_relaxed_block_layout on pvr
-VK_KHR_storage_buffer_storage_class on pvr
-VK_EXT_external_memory_acquire_unmodified on panvk
-VK_EXT_discard_rectangles on NVK
-VK_KHR_present_id on HoneyKrisp
-VK_KHR_present_id2 on HoneyKrisp
-VK_KHR_present_wait on HoneyKrisp
-VK_KHR_present_wait2 on HoneyKrisp
-VK_KHR_maintenance10 on ANV, NVK, RADV
-VK_EXT_shader_uniform_buffer_unsized_array on NVK, RADV
-VK_EXT_device_memory_report on panvk
-VK_VALVE_video_encode_rgb_conversion on radv
-VK_EXT_custom_resolve on RADV
-GL_EXT_shader_pixel_local_storage on Panfrost v6+
+cl_khr_subgroup_rotate on radeonsi
+cl_khr_subgroup_rotate on iris
+VK_EXT_shader_uniform_buffer_unsized_array on panvk
+VK_KHR_shader_constant_data on RADV
+VK_EXT_dynamic_rendering_unused_attachments on panvk
+protectedMemory support on RADV/GFX10+ and VEGA10
+VK_KHR_performance_query on RADV/GFX11
+VK_EXT_conservative_rasterization on panvk
+shaderImageGatherExtended on pvr
+static C++ stdlib required on rusticl to workaround applications using their own C++ stdlib

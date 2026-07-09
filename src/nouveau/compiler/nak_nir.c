@@ -10,15 +10,19 @@
 
 #include "util/u_math.h"
 
-#define OPT(nir, pass, ...) ({                           \
+#define _OPT(pass_macro, ...) ({                         \
    bool this_progress = false;                           \
-   NIR_PASS(this_progress, nir, pass, ##__VA_ARGS__);    \
+   pass_macro(this_progress, ##__VA_ARGS__);             \
    if (this_progress)                                    \
       progress = true;                                   \
    this_progress;                                        \
 })
 
+#define OPT(nir, pass, ...) _OPT(NIR_PASS, nir, pass, ##__VA_ARGS__)
 #define OPT_V(nir, pass, ...) NIR_PASS(_, nir, pass, ##__VA_ARGS__)
+#define LOOP_OPT(...) _OPT(NIR_LOOP_PASS, skip, ##__VA_ARGS__)
+#define LOOP_OPT_NOT_IDEMPOTENT(...) \
+   _OPT(NIR_LOOP_PASS_NOT_IDEMPOTENT, skip, ##__VA_ARGS__)
 
 nir_def *
 nak_nir_load_sysval(nir_builder *b, enum nak_sv idx,
@@ -83,11 +87,12 @@ nak_nir_workgroup_has_one_subgroup(const nir_shader *nir)
 }
 
 static uint8_t
-vectorize_filter_cb(const nir_instr *instr, const void *_data)
+vectorize_filter_cb(const nir_instr *instr, const void *data)
 {
    if (instr->type != nir_instr_type_alu)
       return 0;
 
+   const struct nak_compiler *nak = data;
    const nir_alu_instr *alu = nir_instr_as_alu(instr);
 
    const unsigned bit_size = nir_alu_instr_is_comparison(alu)
@@ -95,6 +100,12 @@ vectorize_filter_cb(const nir_instr *instr, const void *_data)
                              : alu->def.bit_size;
 
    switch (alu->op) {
+   case nir_op_f2f16:
+   case nir_op_f2f16_rtne:
+   case nir_op_f2f16_rtz:
+      if (nak->sm < 86)
+         return 1;
+      return alu->src[0].src.ssa->bit_size == 32 ? 2 : 1;
    case nir_op_fadd:
    case nir_op_fsub:
    case nir_op_fabs:
@@ -104,6 +115,7 @@ vectorize_filter_cb(const nir_instr *instr, const void *_data)
    case nir_op_flt:
    case nir_op_fneu:
    case nir_op_fmul:
+   case nir_op_fmul_rtz:
    case nir_op_ffma:
    case nir_op_fsign:
    case nir_op_fsat:
@@ -128,10 +140,11 @@ phi_vectorize_cb(const nir_instr *instr, const void *data)
    return 1;
 }
 
-static void
-optimize_nir(nir_shader *nir, const struct nak_compiler *nak, bool allow_copies)
+void
+nak_optimize_nir(nir_shader *nir, const struct nak_compiler *nak)
 {
    bool progress;
+   struct set *skip = _mesa_pointer_set_create(NULL);
 
    unsigned lower_flrp =
       (nir->options->lower_flrp16 ? 16 : 0) |
@@ -148,78 +161,76 @@ optimize_nir(nir_shader *nir, const struct nak_compiler *nak, bool allow_copies)
        * code.
        */
       if (nir->info.stage != MESA_SHADER_KERNEL)
-         OPT(nir, nir_split_array_vars, nir_var_function_temp);
+         LOOP_OPT(nir, nir_split_array_vars, nir_var_function_temp);
 
-      OPT(nir, nir_shrink_vec_array_vars, nir_var_function_temp);
-      OPT(nir, nir_opt_deref);
-      if (OPT(nir, nir_opt_memcpy))
-         OPT(nir, nir_split_var_copies);
+      LOOP_OPT(nir, nir_shrink_vec_array_vars, nir_var_function_temp);
+      LOOP_OPT(nir, nir_opt_deref);
+      if (LOOP_OPT(nir, nir_opt_memcpy))
+         LOOP_OPT(nir, nir_split_var_copies);
 
-      OPT(nir, nir_lower_vars_to_ssa);
+      LOOP_OPT(nir, nir_lower_vars_to_ssa);
 
-      if (allow_copies) {
-         /* Only run this pass in the first call to brw_nir_optimize.  Later
-          * calls assume that we've lowered away any copy_deref instructions
-          * and we don't want to introduce any more.
+      if (!nir->info.var_copies_lowered) {
+         /* Only run this pass if nir_lower_var_copies was not called
+          * yet. That would lower away any copy_deref instructions and we
+          * don't want to introduce any more.
           */
-         OPT(nir, nir_opt_find_array_copies);
+         LOOP_OPT(nir, nir_opt_find_array_copies);
       }
-      OPT(nir, nir_opt_copy_prop_vars);
-      OPT(nir, nir_opt_dead_write_vars);
-      OPT(nir, nir_opt_combine_stores, nir_var_all);
+      LOOP_OPT(nir, nir_opt_copy_prop_vars);
+      LOOP_OPT(nir, nir_opt_dead_write_vars);
+      LOOP_OPT(nir, nir_opt_combine_stores, nir_var_all);
 
-      OPT(nir, nir_lower_alu_width, vectorize_filter_cb, NULL);
-      OPT(nir, nir_opt_vectorize, vectorize_filter_cb, NULL);
-      OPT(nir, nir_lower_phis_to_scalar, phi_vectorize_cb, NULL);
-      OPT(nir, nir_lower_frexp);
-      OPT(nir, nir_opt_copy_prop);
-      OPT(nir, nir_opt_dce);
-      OPT(nir, nir_opt_cse);
+      LOOP_OPT(nir, nir_lower_alu_width, vectorize_filter_cb, nak);
+      LOOP_OPT(nir, nir_opt_vectorize, vectorize_filter_cb, (void*)nak);
+      LOOP_OPT(nir, nir_lower_phis_to_scalar, phi_vectorize_cb, NULL);
+      LOOP_OPT(nir, nir_lower_frexp);
+      LOOP_OPT(nir, nir_opt_copy_prop);
+      LOOP_OPT(nir, nir_opt_dce);
+      LOOP_OPT(nir, nir_opt_cse);
 
       nir_opt_peephole_select_options peephole_select_options = {
          .limit = 0,
          .discard_ok = true,
       };
-      OPT(nir, nir_opt_peephole_select, &peephole_select_options);
-      OPT(nir, nir_opt_intrinsics);
-      OPT(nir, nir_opt_idiv_const, 32);
-      OPT(nir, nir_opt_algebraic);
-      OPT(nir, nir_lower_constant_convert_alu_types);
-      OPT(nir, nir_opt_constant_folding);
+      LOOP_OPT_NOT_IDEMPOTENT(nir, nir_opt_peephole_select,
+                              &peephole_select_options);
+      LOOP_OPT(nir, nir_opt_intrinsics);
+      LOOP_OPT(nir, nir_opt_idiv_const, 32);
+      LOOP_OPT_NOT_IDEMPOTENT(nir, nir_opt_algebraic);
+      LOOP_OPT(nir, nir_lower_constant_convert_alu_types);
+      LOOP_OPT(nir, nir_opt_constant_folding);
 
       if (lower_flrp != 0) {
-         OPT(nir, nir_lower_flrp, lower_flrp, false /* always_precise */);
+         LOOP_OPT(nir, nir_lower_flrp, lower_flrp, false /* always_precise */);
          /* Nothing should rematerialize any flrps */
          lower_flrp = 0;
       }
 
-      OPT(nir, nir_opt_dead_cf);
-      if (OPT(nir, nir_opt_loop)) {
+      LOOP_OPT(nir, nir_opt_dead_cf);
+      if (LOOP_OPT_NOT_IDEMPOTENT(nir, nir_opt_loop)) {
          /* If nir_opt_loop makes progress, then we need to clean things up
           * if we want any hope of nir_opt_if or nir_opt_loop_unroll to make
           * progress.
           */
-         OPT(nir, nir_opt_copy_prop);
-         OPT(nir, nir_opt_dce);
+         LOOP_OPT(nir, nir_opt_copy_prop);
+         LOOP_OPT(nir, nir_opt_dce);
       }
-      OPT(nir, nir_opt_if, nir_opt_if_optimize_phi_true_false);
-      OPT(nir, nir_opt_phi_to_bool);
+      LOOP_OPT_NOT_IDEMPOTENT(nir, nir_opt_if,
+                              nir_opt_if_optimize_phi_true_false);
+      LOOP_OPT(nir, nir_opt_phi_to_bool);
       if (nir->options->max_unroll_iterations != 0) {
-         OPT(nir, nir_opt_loop_unroll);
+         LOOP_OPT_NOT_IDEMPOTENT(nir, nir_opt_loop_unroll);
       }
-      OPT(nir, nir_opt_remove_phis);
-      OPT(nir, nir_opt_gcm, false);
-      OPT(nir, nir_opt_undef);
+      LOOP_OPT(nir, nir_opt_remove_phis);
+      LOOP_OPT_NOT_IDEMPOTENT(nir, nir_opt_gcm, false);
+      LOOP_OPT(nir, nir_opt_undef);
    } while (progress);
    OPT(nir, nir_lower_undef_to_zero);
 
    OPT(nir, nir_remove_dead_variables, nir_var_function_temp, NULL);
-}
 
-void
-nak_optimize_nir(nir_shader *nir, const struct nak_compiler *nak)
-{
-   optimize_nir(nir, nak, false);
+   _mesa_set_destroy(skip, NULL);
 }
 
 static unsigned
@@ -256,6 +267,7 @@ lower_bit_size_cb(const nir_instr *instr, void *data)
       case nir_op_flt:
       case nir_op_fneu:
       case nir_op_fmul:
+      case nir_op_fmul_rtz:
       case nir_op_ffma:
       case nir_op_ffmaz:
       case nir_op_fsign:
@@ -265,6 +277,19 @@ lower_bit_size_cb(const nir_instr *instr, void *data)
       case nir_op_fround_even:
       case nir_op_ftrunc:
          if (bit_size == 16  && nak->sm >= 70)
+            return 0;
+         break;
+
+      case nir_op_fcos:
+      case nir_op_fcos_normalized_2_pi:
+      case nir_op_fexp2:
+      case nir_op_flog2:
+      case nir_op_frcp:
+      case nir_op_frsq:
+      case nir_op_fsin:
+      case nir_op_fsin_normalized_2_pi:
+      case nir_op_fsqrt:
+         if (bit_size == 16 && nak->sm >= 73)
             return 0;
          break;
 
@@ -358,13 +383,11 @@ nak_preprocess_nir(nir_shader *nir, const struct nak_compiler *nak)
    OPT(nir, nir_split_var_copies);
    OPT(nir, nir_split_struct_vars, nir_var_function_temp);
 
-   /* Optimize but allow copies because we haven't lowered them yet */
-   optimize_nir(nir, nak, true /* allow_copies */);
+   nak_optimize_nir(nir, nak);
 
    OPT(nir, nir_opt_barrier_modes);
    OPT(nir, nir_opt_acquire_release_barriers, SCOPE_QUEUE_FAMILY);
 
-   OPT(nir, nir_lower_load_const_to_scalar);
    OPT(nir, nir_lower_var_copies);
    OPT(nir, nir_lower_system_values);
    OPT(nir, nir_lower_compute_system_values, NULL);
@@ -468,23 +491,6 @@ nak_nir_lower_system_value_intrin(nir_builder *b, nir_intrinsic_instr *intrin,
 
    nir_def *val;
    switch (intrin->intrinsic) {
-   case nir_intrinsic_load_primitive_id:
-   case nir_intrinsic_load_instance_id:
-   case nir_intrinsic_load_vertex_id: {
-      assert(b->shader->info.stage != MESA_SHADER_VERTEX ||
-             b->shader->info.stage != MESA_SHADER_TESS_CTRL ||
-             b->shader->info.stage == MESA_SHADER_TESS_EVAL ||
-             b->shader->info.stage == MESA_SHADER_GEOMETRY);
-      const gl_system_value sysval =
-         nir_system_value_from_intrinsic(intrin->intrinsic);
-      const uint32_t addr = nak_sysval_attr_addr(nak, sysval);
-      val = nir_ald_nv(b, 1, nir_imm_int(b, 0), nir_imm_int(b, 0),
-                       .base = addr, .flags = 0,
-                       .range_base = addr, .range = 4,
-                       .access = ACCESS_CAN_REORDER);
-      break;
-   }
-
    case nir_intrinsic_load_patch_vertices_in: {
       val = nak_nir_load_sysval(b, NAK_SV_PRIM_TYPE, ACCESS_CAN_REORDER);
       val = nir_extract_u8(b, val, nir_imm_int(b, 1));
@@ -531,7 +537,6 @@ nak_nir_lower_system_value_intrin(nir_builder *b, nir_intrinsic_instr *intrin,
    }
 
    case nir_intrinsic_load_subgroup_invocation:
-   case nir_intrinsic_load_helper_invocation:
    case nir_intrinsic_load_invocation_id:
    case nir_intrinsic_load_workgroup_id: {
       const gl_system_value sysval =
@@ -602,8 +607,8 @@ nak_nir_lower_system_value_intrin(nir_builder *b, nir_intrinsic_instr *intrin,
       }
       break;
 
-   case nir_intrinsic_is_helper_invocation: {
-      /* Unlike load_helper_invocation, this one isn't re-orderable */
+   case nir_intrinsic_is_helper_invocation:
+   case nir_intrinsic_load_helper_invocation: {
       val = nak_nir_load_sysval(b, NAK_SV_THREAD_KILL, 0);
       break;
    }
@@ -825,6 +830,36 @@ nak_nir_remove_barrier_intrin(nir_builder *b, nir_intrinsic_instr *barrier,
 }
 
 static bool
+nak_nir_lower_printf_intrin(nir_builder *b, nir_intrinsic_instr *intrin,
+                            void *data)
+{
+   const struct nak_compiler* nak = data;
+   const bool is_graphics = b->shader->info.stage != MESA_SHADER_COMPUTE;
+   b->cursor = nir_before_instr(&intrin->instr);
+   if (intrin->intrinsic == nir_intrinsic_load_printf_buffer_address) {
+      nir_def *buffer_addr = nir_ldc_nv(
+         b, 1, 64,
+         nir_imm_int(b, nak_const_offsets(nak, is_graphics)->printf_cb),
+         nir_imm_int(b, nak_const_offsets(nak, is_graphics)->printf_buffer_offset));
+      nir_def_replace(&intrin->def, buffer_addr);
+      return true;
+   } else if (intrin->intrinsic == nir_intrinsic_load_printf_buffer_size) {
+      nir_def_replace(&intrin->def,
+                      nir_imm_int(b, NAK_PRINTF_BUFFER_SIZE));
+      return true;
+   } else {
+      return false;
+   }
+}
+
+static bool
+nak_nir_lower_printf(nir_shader *nir, const struct nak_compiler* nak)
+{
+   return nir_shader_intrinsics_pass(nir, nak_nir_lower_printf_intrin,
+                                     nir_metadata_none, (void*)nak);
+}
+
+static bool
 nak_nir_remove_barriers(nir_shader *nir)
 {
    /* We'll set this back to true if we leave any barriers in place */
@@ -850,14 +885,18 @@ nak_mem_vectorize_cb(unsigned align_mul, unsigned align_offset,
    if (hole_size > 0)
       return false;
 
+   /* Prevent creating vec5 or other difficult to vectorize vectors */
+   if (num_components > 4 && !util_is_power_of_two_nonzero(num_components))
+      return false;
+
    unsigned max_bytes = 128u / 8u;
    if (low->intrinsic == nir_intrinsic_ldc_nv ||
        low->intrinsic == nir_intrinsic_ldcx_nv)
       max_bytes = 64u / 8u;
 
-   align_mul = MIN2(align_mul, max_bytes);
-   align_offset = align_offset % align_mul;
-   return align_offset + num_components * (bit_size / 8) <= align_mul;
+   unsigned byte_load = num_components * (bit_size / 8);
+   unsigned combined_align = nir_combined_align(align_mul, align_offset);
+   return byte_load <= combined_align && byte_load <= max_bytes;
 }
 
 static nir_mem_access_size_align
@@ -964,6 +1003,175 @@ split_conversions_cb(const nir_instr *instr, void *data)
       return 0;
 
    return 32;
+}
+
+static bool
+nak_nir_lower_load_store(nir_shader *nir, const struct nak_compiler *nak)
+{
+   bool progress = false;
+
+   nir_foreach_function_impl(impl, nir) {
+      bool this_progress = false;
+      nir_builder b = nir_builder_create(impl);
+      nir_foreach_block(block, impl) {
+         nir_foreach_instr_safe(instr, block) {
+            if (instr->type != nir_instr_type_intrinsic)
+               continue;
+
+            nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
+            b.cursor = nir_before_instr(instr);
+            nir_src *addr = nir_get_io_offset_src(intr);
+            nir_def *res = NULL;
+            nir_intrinsic_instr *new = NULL;
+
+            switch (intr->intrinsic) {
+            case nir_intrinsic_load_global:
+            case nir_intrinsic_load_global_constant: {
+               nir_def *nir_true = nir_imm_bool(&b, true);
+               res = nir_load_global_nv(&b, intr->def.num_components, intr->def.bit_size, addr->ssa, nir_true);
+               break;
+            }
+            case nir_intrinsic_load_global_bounded:
+            case nir_intrinsic_load_global_constant_bounded: {
+               assert(nak->sm >= 73);
+
+               nir_src *base = &intr->src[0];
+               nir_src *offset = &intr->src[1];
+               nir_src *size = &intr->src[2];
+               unsigned load_size = intr->def.num_components * intr->def.bit_size / 8;
+
+               /* see addr_is_in_bounds in nir_lower_explicit_io.c */
+               nir_def *addr = nir_iadd(&b, base->ssa, nir_u2u64(&b, offset->ssa));
+               nir_def *last_byte = nir_iadd_imm(&b, offset->ssa, load_size - 1);
+               nir_def *cond = nir_ult(&b, last_byte, size->ssa);
+               res = nir_load_global_nv(&b, intr->def.num_components, intr->def.bit_size, addr, cond);
+               break;
+            }
+            case nir_intrinsic_load_scratch:
+               res = nir_load_scratch_nv(&b, intr->def.num_components, intr->def.bit_size, addr->ssa);
+               break;
+            case nir_intrinsic_load_shared:
+               res = nir_load_shared_nv(&b, intr->def.num_components, intr->def.bit_size, addr->ssa);
+               break;
+            case nir_intrinsic_store_global:
+               new = nir_store_global_nv(&b, intr->src[0].ssa, addr->ssa);
+               break;
+            case nir_intrinsic_store_scratch:
+               new = nir_store_scratch_nv(&b, intr->src[0].ssa, addr->ssa);
+               break;
+            case nir_intrinsic_store_shared:
+               new = nir_store_shared_nv(&b, intr->src[0].ssa, addr->ssa);
+               break;
+            case nir_intrinsic_global_atomic:
+               res = nir_global_atomic_nv(&b, intr->def.bit_size, addr->ssa, intr->src[1].ssa);
+               break;
+            case nir_intrinsic_global_atomic_swap:
+               res = nir_global_atomic_swap_nv(&b, intr->def.bit_size, addr->ssa, intr->src[1].ssa, intr->src[2].ssa);
+               break;
+            case nir_intrinsic_shared_atomic:
+               res = nir_shared_atomic_nv(&b, intr->def.bit_size, addr->ssa, intr->src[1].ssa);
+               break;
+            case nir_intrinsic_shared_atomic_swap:
+               res = nir_shared_atomic_swap_nv(&b, intr->def.bit_size, addr->ssa, intr->src[1].ssa, intr->src[2].ssa);
+               break;
+            default:
+               continue;
+            }
+
+            if (!new)
+               new = nir_def_as_intrinsic(res);
+
+            if (nir_intrinsic_has_access(intr))
+               nir_intrinsic_set_access(new, nir_intrinsic_access(intr));
+            if (intr->intrinsic == nir_intrinsic_load_global_constant ||
+                intr->intrinsic == nir_intrinsic_load_global_constant_bounded)
+               nir_intrinsic_set_access(new, nir_intrinsic_access(new) | ACCESS_CAN_REORDER);
+
+            if (nir_intrinsic_has_align_mul(intr))
+               nir_intrinsic_set_align_mul(new, nir_intrinsic_align_mul(intr));
+            if (nir_intrinsic_has_align_offset(intr))
+               nir_intrinsic_set_align_offset(new, nir_intrinsic_align_offset(intr));
+
+            if (nir_intrinsic_has_atomic_op(intr))
+               nir_intrinsic_set_atomic_op(new, nir_intrinsic_atomic_op(intr));
+
+            if (nir_intrinsic_has_base(intr))
+               nir_intrinsic_set_base(new, nir_intrinsic_base(intr));
+
+            if (res)
+               nir_def_replace(&intr->def, res);
+            else
+               nir_instr_remove(instr);
+
+            this_progress = true;
+         }
+      }
+
+      progress |= nir_progress(this_progress, impl,
+         nir_metadata_control_flow
+      );
+   }
+
+   return progress;
+}
+
+static bool
+nak_nir_opt_offset_shift_nv_impl(struct nir_builder *b,
+                                 nir_intrinsic_instr *intrin, void *data)
+{
+   switch (intrin->intrinsic) {
+   case nir_intrinsic_load_shared_nv:
+   case nir_intrinsic_store_shared_nv:
+   case nir_intrinsic_shared_atomic_nv:
+   case nir_intrinsic_shared_atomic_swap_nv: {
+      nir_src *addr = nir_get_io_offset_src(intrin);
+      nir_alu_instr *addr_alu = nir_def_as_alu_or_null(addr->ssa);
+
+      if (!addr_alu || addr_alu->op != nir_op_ishl ||
+          !nir_src_is_const(addr_alu->src[1].src))
+         return false;
+
+      uint32_t shift_const = nir_alu_src_as_uint(addr_alu->src[1]) +
+         nir_intrinsic_offset_shift_nv(intrin);
+
+      if (shift_const < 2 || shift_const > 4)
+         return false;
+
+      nir_intrinsic_set_offset_shift_nv(intrin, shift_const);
+      b->cursor = nir_before_instr(&intrin->instr);
+      nir_def *new_addr = nir_ssa_for_alu_src(b, addr_alu, 0);
+      nir_src_rewrite(addr, new_addr);
+      return true;
+   }
+   default:
+      return false;
+   }
+}
+
+static bool
+nak_nir_opt_offset_shift_nv(nir_shader *nir, const struct nak_compiler *nak)
+{
+   assert(nak->sm >= 75);
+   return nir_shader_intrinsics_pass(
+      nir,
+      nak_nir_opt_offset_shift_nv_impl,
+      nir_metadata_control_flow,
+      NULL
+   );
+}
+
+static uint32_t
+nak_nir_max_imm_offset(nir_intrinsic_instr *intrin, const void *data)
+{
+   const struct nak_compiler *nak = data;
+
+   switch (intrin->intrinsic) {
+   case nir_intrinsic_isberd_nv:
+   case nir_intrinsic_isbewr_nv:
+      return nak->sm >= 86 ? UINT16_MAX : 0;
+   default:
+      return 0;
+   }
 }
 
 void
@@ -1075,7 +1283,7 @@ nak_postprocess_nir(nir_shader *nir,
    case MESA_SHADER_TESS_EVAL:
    case MESA_SHADER_GEOMETRY:
       OPT(nir, nir_lower_io, nir_var_shader_in | nir_var_shader_out,
-          type_size_vec4, nir_lower_io_lower_64bit_to_32_new);
+          type_size_vec4, nir_lower_io_lower_64bit_to_32);
       OPT(nir, nir_opt_constant_folding);
       OPT(nir, nak_nir_lower_vtg_io, nak);
       if (nir->info.stage == MESA_SHADER_GEOMETRY)
@@ -1095,21 +1303,41 @@ nak_postprocess_nir(nir_shader *nir,
 
    case MESA_SHADER_COMPUTE:
    case MESA_SHADER_KERNEL:
+      /* system value lowering can leave constant address chains around */
+      OPT(nir, nir_opt_constant_folding);
       break;
 
    default:
       UNREACHABLE("Unsupported shader stage");
    }
 
+   OPT(nir, nak_nir_lower_load_store, nak);
+
+   struct nir_opt_offsets_options nak_offset_options = {
+      .max_offset_cb = nak_nir_max_imm_offset,
+      .cb_data = nak,
+   };
+   OPT(nir, nir_opt_offsets, &nak_offset_options);
+
+   /* Should run after nir_opt_offsets, because nir_opt_algebraic will move
+    * iadds down the chain */
+   if (nak->sm >= 75 && nir->info.shared_size)
+      OPT(nir, nak_nir_opt_offset_shift_nv, nak);
+
    OPT(nir, nir_lower_doubles, NULL, nak->nir_options.lower_doubles_options);
    OPT(nir, nir_lower_int64);
 
+   if (nak->sm >= 70)
+      OPT(nir, nir_normalize_sin_cos);
+
+   OPT(nir, nir_opt_fp_math_ctrl);
    nak_optimize_nir(nir, nak);
 
    do {
       progress = false;
       OPT(nir, nir_opt_algebraic_late);
       OPT(nir, nak_nir_lower_algebraic_late, nak);
+      OPT(nir, nir_opt_algebraic_distribute_src_mods);
 
       /* If we're lowering fp64 sat but not min/max, the sat lowering may have
        * been undone by nir_opt_algebraic.  Lower sat again just to be sure.
@@ -1157,6 +1385,9 @@ nak_postprocess_nir(nir_shader *nir,
 
    OPT(nir, nak_nir_remove_barriers);
 
+   if (NAK_CAN_PRINTF)
+      OPT(nir, nak_nir_lower_printf, nak);
+
    /* Call divergence analysis regardless of sm version. */
    nir_divergence_analysis(nir);
 
@@ -1187,60 +1418,4 @@ nak_postprocess_nir(nir_shader *nir,
               _mesa_shader_stage_to_string(nir->info.stage));
       nir_print_shader(nir, stderr);
    }
-}
-
-static bool
-scalar_is_imm_int(nir_scalar x, unsigned bits, bool is_signed)
-{
-   if (!nir_scalar_is_const(x))
-      return false;
-
-   if (is_signed) {
-      int64_t imm = nir_scalar_as_int(x);
-      return u_intN_min(bits) <= imm && imm <= u_intN_max(bits);
-   } else {
-      return nir_scalar_as_uint(x) < u_uintN_max(bits);
-   }
-}
-
-struct nak_io_addr_offset
-nak_get_io_addr_offset(nir_def *addr, uint8_t imm_bits)
-{
-   nir_scalar addr_s = {
-      .def = addr,
-      .comp = 0,
-   };
-
-   /* If the entire address is constant, it's an unsigned immediate */
-   if (scalar_is_imm_int(addr_s, imm_bits, false)) {
-      /* Base is a dumb name for this.  It should be offset */
-      return (struct nak_io_addr_offset) {
-         .offset = nir_scalar_as_int(addr_s),
-      };
-   }
-
-   addr_s = nir_scalar_chase_movs(addr_s);
-   if (!nir_scalar_is_alu(addr_s) ||
-       nir_scalar_alu_op(addr_s) != nir_op_iadd) {
-      return (struct nak_io_addr_offset) {
-         .base = addr_s,
-      };
-   }
-
-   for (unsigned i = 0; i < 2; i++) {
-      nir_scalar off_s = nir_scalar_chase_alu_src(addr_s, i);
-      off_s = nir_scalar_chase_movs(off_s);
-
-      /* If it's imm+indirect then the immediate is signed */
-      if (scalar_is_imm_int(off_s, imm_bits, true)) {
-         return (struct nak_io_addr_offset) {
-            .base = nir_scalar_chase_alu_src(addr_s, 1 - i),
-            .offset = nir_scalar_as_int(off_s),
-         };
-      }
-   }
-
-   return (struct nak_io_addr_offset) {
-      .base = addr_s,
-   };
 }

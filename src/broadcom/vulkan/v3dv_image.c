@@ -21,14 +21,21 @@
  * IN THE SOFTWARE.
  */
 
-#include "v3dv_private.h"
+#include "v3dv_device.h"
+#include "v3dv_image.h"
+#include "v3dv_entrypoints.h"
+#include "v3dv_version_dispatch.h"
+#include "vk_format.h"
+#include "vk_log.h"
 
 #include "drm-uapi/drm_fourcc.h"
 #include "util/format/u_format.h"
 #include "util/u_math.h"
 #include "vk_util.h"
-#include "vulkan/wsi/wsi_common.h"
 #include "vk_android.h"
+
+#define V3D_VERSION 42
+#include "v3dv_format_table.h"
 
 /**
  * Computes the HW's UIFblock padding for a given height/cpp.
@@ -518,8 +525,11 @@ v3dv_image_init(struct v3dv_device *device,
     * Image layout will be filled up during vkBindImageMemory2
     * This section is removed by the optimizer for non-ANDROID builds
     */
-   if (vk_image_is_android_hardware_buffer(&image->vk))
-      return VK_SUCCESS;
+   if (vk_image_is_android_hardware_buffer(&image->vk) ||
+       vk_image_is_android_native_buffer_alias(&image->vk)) {
+      return vk_android_init_deferred_image(&device->vk, &image->vk,
+                                            pCreateInfo, pAllocator);
+   }
 
    bool disjoint = image->vk.create_flags & VK_IMAGE_CREATE_DISJOINT_BIT;
 
@@ -533,16 +543,11 @@ create_image(struct v3dv_device *device,
              const VkAllocationCallbacks *pAllocator,
              VkImage *pImage)
 {
-#if !DETECT_OS_ANDROID
-   const VkImageSwapchainCreateInfoKHR *swapchain_info =
-      vk_find_struct_const(pCreateInfo->pNext, IMAGE_SWAPCHAIN_CREATE_INFO_KHR);
-   if (swapchain_info && swapchain_info->swapchain != VK_NULL_HANDLE) {
+   if (wsi_common_is_swapchain_image(pCreateInfo)) {
       return wsi_common_create_swapchain_image(&device->pdevice->wsi_device,
                                                pCreateInfo,
-                                               swapchain_info->swapchain,
                                                pImage);
    }
-#endif
 
    VkResult result;
    struct v3dv_image *image = NULL;

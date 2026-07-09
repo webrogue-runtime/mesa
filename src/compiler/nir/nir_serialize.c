@@ -529,7 +529,7 @@ union packed_instr {
    } any;
    struct {
       unsigned instr_type : 4;
-      unsigned exact : 1;
+      unsigned pad : 1;
       unsigned no_signed_wrap : 1;
       unsigned no_unsigned_wrap : 1;
       /* Swizzles for 2 srcs */
@@ -719,7 +719,6 @@ write_alu(write_ctx *ctx, const nir_alu_instr *alu)
    header.u32 = 0;
 
    header.alu.instr_type = alu->instr.type;
-   header.alu.exact = alu->exact;
    header.alu.no_signed_wrap = alu->no_signed_wrap;
    header.alu.no_unsigned_wrap = alu->no_unsigned_wrap;
    header.alu.op = alu->op;
@@ -733,7 +732,8 @@ write_alu(write_ctx *ctx, const nir_alu_instr *alu)
    }
 
    write_def(ctx, &alu->def, header, alu->instr.type);
-   blob_write_uint32(ctx->blob, alu->fp_fast_math);
+   if (nir_op_infos[alu->op].valid_fp_math_ctrl)
+      blob_write_uint32(ctx->blob, alu->fp_math_ctrl);
 
    if (header.alu.packed_src_ssa_16bit) {
       for (unsigned i = 0; i < num_srcs; i++) {
@@ -783,12 +783,12 @@ read_alu(read_ctx *ctx, union packed_instr header)
    unsigned num_srcs = nir_op_infos[header.alu.op].num_inputs;
    nir_alu_instr *alu = nir_alu_instr_create(ctx->nir, header.alu.op);
 
-   alu->exact = header.alu.exact;
    alu->no_signed_wrap = header.alu.no_signed_wrap;
    alu->no_unsigned_wrap = header.alu.no_unsigned_wrap;
 
    read_def(ctx, &alu->def, &alu->instr, header);
-   alu->fp_fast_math = blob_read_uint32(ctx->blob);
+   if (nir_op_infos[alu->op].valid_fp_math_ctrl)
+      alu->fp_math_ctrl = blob_read_uint32(ctx->blob);
 
    if (header.alu.packed_src_ssa_16bit) {
       for (unsigned i = 0; i < num_srcs; i++) {
@@ -915,8 +915,7 @@ write_deref(write_ctx *ctx, const nir_deref_instr *deref)
          header.deref_var.object_idx = var_idx;
    }
 
-   if (deref->deref_type == nir_deref_type_array ||
-       deref->deref_type == nir_deref_type_ptr_as_array) {
+   if (nir_deref_instr_is_arr(deref)) {
       header.deref.packed_src_ssa_16bit = are_object_ids_16bit(ctx);
 
       header.deref.in_bounds = deref->arr.in_bounds;
@@ -1054,7 +1053,7 @@ write_intrinsic(write_ctx *ctx, const nir_intrinsic_instr *intrin)
    /* 10 bits for nir_intrinsic_op */
    STATIC_ASSERT(nir_num_intrinsics <= 1024);
    unsigned num_srcs = nir_intrinsic_infos[intrin->intrinsic].num_srcs;
-   unsigned num_indices = nir_intrinsic_infos[intrin->intrinsic].num_indices;
+   unsigned num_index_slots = nir_intrinsic_infos[intrin->intrinsic].num_index_slots;
    assert(intrin->intrinsic < 1024);
 
    union packed_instr header;
@@ -1064,19 +1063,19 @@ write_intrinsic(write_ctx *ctx, const nir_intrinsic_instr *intrin)
    header.intrinsic.intrinsic = intrin->intrinsic;
 
    /* Analyze constant indices to decide how to encode them. */
-   if (num_indices) {
+   if (num_index_slots) {
       unsigned max_bits = 0;
-      for (unsigned i = 0; i < num_indices; i++) {
+      for (unsigned i = 0; i < num_index_slots; i++) {
          unsigned max = util_last_bit(intrin->const_index[i]);
          max_bits = MAX2(max_bits, max);
       }
 
-      if (max_bits * num_indices <= 8) {
+      if (max_bits * num_index_slots <= 8) {
          header.intrinsic.const_indices_encoding = const_indices_all_combined;
 
          /* Pack all const indices into 8 bits. */
-         unsigned bit_size = 8 / num_indices;
-         for (unsigned i = 0; i < num_indices; i++) {
+         unsigned bit_size = 8 / num_index_slots;
+         for (unsigned i = 0; i < num_index_slots; i++) {
             header.intrinsic.packed_const_indices |=
                intrin->const_index[i] << (i * bit_size);
          }
@@ -1096,18 +1095,18 @@ write_intrinsic(write_ctx *ctx, const nir_intrinsic_instr *intrin)
    for (unsigned i = 0; i < num_srcs; i++)
       write_src(ctx, &intrin->src[i]);
 
-   if (num_indices) {
+   if (num_index_slots) {
       switch (header.intrinsic.const_indices_encoding) {
       case const_indices_8bit:
-         for (unsigned i = 0; i < num_indices; i++)
+         for (unsigned i = 0; i < num_index_slots; i++)
             blob_write_uint8(ctx->blob, intrin->const_index[i]);
          break;
       case const_indices_16bit:
-         for (unsigned i = 0; i < num_indices; i++)
+         for (unsigned i = 0; i < num_index_slots; i++)
             blob_write_uint16(ctx->blob, intrin->const_index[i]);
          break;
       case const_indices_32bit:
-         for (unsigned i = 0; i < num_indices; i++)
+         for (unsigned i = 0; i < num_index_slots; i++)
             blob_write_uint32(ctx->blob, intrin->const_index[i]);
          break;
       }
@@ -1121,7 +1120,7 @@ read_intrinsic(read_ctx *ctx, union packed_instr header)
    nir_intrinsic_instr *intrin = nir_intrinsic_instr_create(ctx->nir, op);
 
    unsigned num_srcs = nir_intrinsic_infos[op].num_srcs;
-   unsigned num_indices = nir_intrinsic_infos[op].num_indices;
+   unsigned num_index_slots = nir_intrinsic_infos[op].num_index_slots;
 
    if (nir_intrinsic_infos[op].has_dest)
       read_def(ctx, &intrin->def, &intrin->instr, header);
@@ -1144,12 +1143,12 @@ read_intrinsic(read_ctx *ctx, union packed_instr header)
       }
    }
 
-   if (num_indices) {
+   if (num_index_slots) {
       switch (header.intrinsic.const_indices_encoding) {
       case const_indices_all_combined: {
-         unsigned bit_size = 8 / num_indices;
+         unsigned bit_size = 8 / num_index_slots;
          unsigned bit_mask = u_bit_consecutive(0, bit_size);
-         for (unsigned i = 0; i < num_indices; i++) {
+         for (unsigned i = 0; i < num_index_slots; i++) {
             intrin->const_index[i] =
                (header.intrinsic.packed_const_indices >> (i * bit_size)) &
                bit_mask;
@@ -1157,15 +1156,15 @@ read_intrinsic(read_ctx *ctx, union packed_instr header)
          break;
       }
       case const_indices_8bit:
-         for (unsigned i = 0; i < num_indices; i++)
+         for (unsigned i = 0; i < num_index_slots; i++)
             intrin->const_index[i] = blob_read_uint8(ctx->blob);
          break;
       case const_indices_16bit:
-         for (unsigned i = 0; i < num_indices; i++)
+         for (unsigned i = 0; i < num_index_slots; i++)
             intrin->const_index[i] = blob_read_uint16(ctx->blob);
          break;
       case const_indices_32bit:
-         for (unsigned i = 0; i < num_indices; i++)
+         for (unsigned i = 0; i < num_index_slots; i++)
             intrin->const_index[i] = blob_read_uint32(ctx->blob);
          break;
       }
@@ -1375,10 +1374,11 @@ union packed_tex_data {
       unsigned texture_non_uniform : 1;
       unsigned sampler_non_uniform : 1;
       unsigned offset_non_uniform : 1;
+      unsigned embedded_sampler : 1;
       unsigned array_is_lowered_cube : 1;
       unsigned is_gather_implicit_lod : 1;
       unsigned can_speculate : 1;
-      unsigned unused : 3; /* Mark unused for valgrind. */
+      unsigned unused : 2; /* Mark unused for valgrind. */
    } u;
 };
 
@@ -1416,6 +1416,7 @@ write_tex(write_ctx *ctx, const nir_tex_instr *tex)
       .u.texture_non_uniform = tex->texture_non_uniform,
       .u.sampler_non_uniform = tex->sampler_non_uniform,
       .u.offset_non_uniform = tex->offset_non_uniform,
+      .u.embedded_sampler = tex->embedded_sampler,
       .u.array_is_lowered_cube = tex->array_is_lowered_cube,
       .u.is_gather_implicit_lod = tex->is_gather_implicit_lod,
       .u.can_speculate = tex->can_speculate,
@@ -1457,6 +1458,7 @@ read_tex(read_ctx *ctx, union packed_instr header)
    tex->texture_non_uniform = packed.u.texture_non_uniform;
    tex->sampler_non_uniform = packed.u.sampler_non_uniform;
    tex->offset_non_uniform = packed.u.offset_non_uniform;
+   tex->embedded_sampler = packed.u.embedded_sampler;
    tex->array_is_lowered_cube = packed.u.array_is_lowered_cube;
    tex->is_gather_implicit_lod = packed.u.is_gather_implicit_lod;
    tex->can_speculate = packed.u.can_speculate;
@@ -1887,6 +1889,7 @@ write_loop(write_ctx *ctx, nir_loop *loop)
    blob_write_uint8(ctx->blob, loop->control);
    bool has_continue_construct = nir_loop_has_continue_construct(loop);
    blob_write_uint8(ctx->blob, has_continue_construct);
+   blob_write_uint8(ctx->blob, loop->do_while);
 
    write_cf_list(ctx, &loop->body);
    if (has_continue_construct) {
@@ -1903,6 +1906,7 @@ read_loop(read_ctx *ctx, struct exec_list *cf_list)
 
    loop->control = blob_read_uint8(ctx->blob);
    bool has_continue_construct = blob_read_uint8(ctx->blob);
+   loop->do_while = blob_read_uint8(ctx->blob);
 
    read_cf_list(ctx, &loop->body);
    if (has_continue_construct) {

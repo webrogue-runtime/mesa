@@ -35,6 +35,7 @@
 #include "intel_wa.h"
 #include "i915/intel_device_info.h"
 #include "xe/intel_device_info.h"
+#include "virtio/intel_virtio.h"
 
 #include "common/intel_gem.h"
 #include "util/u_debug.h"
@@ -79,6 +80,7 @@ static const struct {
    { "bmg", 0xe202 },
    { "ptl", 0xb080 },
    { "nvl-u", 0xd740 },
+   { "nvl", 0xd750 },
 };
 
 /**
@@ -1181,19 +1183,19 @@ static const struct intel_device_info intel_device_info_arl_h = {
  *
  * (both 10 and 12 map to different compressed L3UC entries)
  */
-#define XE2_PAT_ENTRIES                                         \
-   /* BSpec 71582 (r59285) */                                   \
-   .pat = {                                                     \
-      /* CPU: WB, GPU: PAT 1 => WB, 1WAY */                     \
-      .cached_coherent = PAT_ENTRY(1, WB),                      \
-      /* CPU: WC, GPU: PAT 6 => XD */                           \
-      .scanout = PAT_ENTRY(6, WC),                              \
-      /* CPU: WC, GPU: PAT 0 => WB */                           \
-      .writecombining = PAT_ENTRY(0, WC),                       \
-      /* CPU: WC, GPU: PAT 11 => XD, compressed */              \
-      .compressed_scanout = PAT_ENTRY(11, WC),                  \
-      /* CPU: WC, GPU: PAT 9 => WB, compressed */               \
-      .compressed = PAT_ENTRY(9, WC)                            \
+#define XE2_PAT_ENTRIES                                              \
+   /* BSpec 71582 (r59285) */                                        \
+   .pat = {                                                          \
+      /* CPU: WB, GPU: PAT 1 => WB, 1WAY */                          \
+      .cached_coherent = PAT_ENTRY(1, WB),                           \
+      /* CPU: WC, GPU: PAT 6 => WB+display transient */              \
+      .scanout = PAT_ENTRY(6, WC),                                   \
+      /* CPU: WC, GPU: PAT 0 => WB */                                \
+      .writecombining = PAT_ENTRY(0, WC),                            \
+      /* CPU: WC, GPU: PAT 11 => WB+display transient+compressed */  \
+      .compressed_scanout = PAT_ENTRY(11, INVALID),                  \
+      /* CPU: WC, GPU: PAT 9 => WB+compressed */                     \
+      .compressed = PAT_ENTRY(9, INVALID)                            \
    }
 
 #define XE2_CONFIG(platform_suffix)                             \
@@ -1216,9 +1218,16 @@ static const struct intel_device_info intel_device_info_lnl = {
    .ver = 30,                                                   \
    .verx10 = 300
 
+#define XE3_URB_MIN_MAX_ENTRIES                                 \
+   XEHP_URB_MIN_MAX_ENTRIES
+
+#define XE3_PLACEHOLDER_THREADS_AND_URB                         \
+   XEHP_PLACEHOLDER_THREADS_AND_URB,                            \
+   XE3_URB_MIN_MAX_ENTRIES
+
 #define XE3_CONFIG(platform_suffix)                             \
    XE3_FEATURES, XE2_PAT_ENTRIES,                               \
-   XEHP_PLACEHOLDER_THREADS_AND_URB,                            \
+   XE3_PLACEHOLDER_THREADS_AND_URB,                             \
    .platform = INTEL_PLATFORM_ ## platform_suffix
 
 
@@ -1241,6 +1250,27 @@ static const struct intel_device_info intel_device_info_nvl_s_hx_ul = {
 
 static const struct intel_device_info intel_device_info_nvl_u_h = {
    XE3_CONFIG(NVL_U),
+   .has_local_mem = false,
+};
+
+#define XE3P_PLACEHOLDER_THREADS_AND_URB                        \
+   XE3_PLACEHOLDER_THREADS_AND_URB,                             \
+   .num_thread_per_eu = 8 /* BSpec 74198 */,                    \
+   .urb.min_entries[MESA_SHADER_TASK] = 2,                      \
+   .urb.min_entries[MESA_SHADER_MESH] = 2
+
+#define XE3P_FEATURES                                           \
+   XE3_FEATURES,                                                \
+   .ver = 35,                                                   \
+   .verx10 = 350
+
+#define XE3P_CONFIG(platform_suffix)                            \
+   XE3P_FEATURES, XE2_PAT_ENTRIES,                              \
+   XE3P_PLACEHOLDER_THREADS_AND_URB,                            \
+   .platform = INTEL_PLATFORM_ ## platform_suffix
+
+static const struct intel_device_info intel_device_info_nvl_p = {
+   XE3P_CONFIG(NVL_P),
    .has_local_mem = false,
 };
 
@@ -1570,6 +1600,7 @@ intel_device_info_init_common(int pci_id, bool building,
    case 12:
    case 20:
    case 30:
+   case 35:
       devinfo->max_wm_threads = 128 /* threads-per-PSD */
                               * devinfo->num_slices
                               * 8; /* subslices per slice */
@@ -1628,6 +1659,14 @@ intel_device_info_apply_workarounds(struct intel_device_info *devinfo)
 
    if (intel_needs_workaround(devinfo, 18040209780))
       devinfo->max_gs_threads = 312;
+
+   /* Wa_16025326720 */
+   if (intel_needs_workaround(devinfo, 16025326720)) {
+      devinfo->urb.max_entries[MESA_SHADER_TESS_CTRL] = 1408;
+      devinfo->urb.max_entries[MESA_SHADER_TASK] = 1408;
+      devinfo->urb.max_entries[MESA_SHADER_MESH] = 1792;
+      devinfo->urb.max_entries[MESA_SHADER_GEOMETRY] = 1792;
+   }
 
    /* Fixes issues with:
     * dEQP-GLES31.functional.geometry_shading.layered.render_with_default_layer_cubemap
@@ -1698,37 +1737,10 @@ intel_device_info_adjust_memory(struct intel_device_info *devinfo)
 static void
 init_max_scratch_ids(struct intel_device_info *devinfo)
 {
-   /* Determine the max number of subslices that potentially might be used in
+   /* Determine the max subslice that potentially might be used in
     * scratch space ids.
-    *
-    * For, Gfx11+, scratch space allocation is based on the number of threads
-    * in the base configuration.
-    *
-    * For Gfx9, devinfo->subslice_total is the TOTAL number of subslices and
-    * we wish to view that there are 4 subslices per slice instead of the
-    * actual number of subslices per slice. The documentation for 3DSTATE_PS
-    * "Scratch Space Base Pointer" says:
-    *
-    *    "Scratch Space per slice is computed based on 4 sub-slices.  SW
-    *     must allocate scratch space enough so that each slice has 4
-    *     slices allowed."
-    *
-    * According to the other driver team, this applies to compute shaders
-    * as well.  This is not currently documented at all.
-    *
-    * For Gfx8 and older we user devinfo->subslice_total.
     */
-   unsigned subslices;
-   if (devinfo->verx10 == 125)
-      subslices = 32;
-   else if (devinfo->ver == 12)
-      subslices = (devinfo->platform == INTEL_PLATFORM_DG1 || devinfo->gt == 2 ? 6 : 2);
-   else if (devinfo->ver == 11)
-      subslices = 8;
-   else if (devinfo->ver >= 9 && devinfo->ver < 11)
-      subslices = 4 * devinfo->num_slices;
-   else
-      subslices = devinfo->subslice_total;
+   unsigned subslices = intel_device_info_dual_subslice_id_bound(devinfo);
    assert(subslices >= devinfo->subslice_total);
 
    unsigned scratch_ids_per_subslice;
@@ -1893,29 +1905,39 @@ intel_get_device_info_from_fd(int fd, struct intel_device_info *devinfo, int min
     * rely on an ioctl to get PCI device id for the next step when skipping
     * this drm query.
     */
-   drmDevicePtr drmdev = NULL;
-   if (drmGetDevice2(fd, DRM_DEVICE_GET_PCI_REVISION, &drmdev)) {
-      mesa_loge("Failed to query drm device.");
-      return false;
-   }
-   if (!intel_device_info_init_common(drmdev->deviceinfo.pci->device_id,
-                                      false, devinfo)) {
+   if (is_intel_virtio_fd(fd)) {
+      if (!intel_virtio_get_pci_device_info(fd, devinfo))
+         return false;
+
+      if (!intel_device_info_init_common(devinfo->pci_device_id,
+                                         false, devinfo))
+         return false;
+
+      devinfo->is_virtio = true;
+   } else {
+      drmDevicePtr drmdev = NULL;
+      if (drmGetDevice2(fd, DRM_DEVICE_GET_PCI_REVISION, &drmdev)) {
+         mesa_loge("Failed to query drm device.");
+         return false;
+      }
+      if (!intel_device_info_init_common(drmdev->deviceinfo.pci->device_id,
+                                         false, devinfo)) {
+         drmFreeDevice(&drmdev);
+         return false;
+      }
+
+      devinfo->pci_domain = drmdev->businfo.pci->domain;
+      devinfo->pci_bus = drmdev->businfo.pci->bus;
+      devinfo->pci_dev = drmdev->businfo.pci->dev;
+      devinfo->pci_func = drmdev->businfo.pci->func;
+      devinfo->pci_device_id = drmdev->deviceinfo.pci->device_id;
+      devinfo->pci_revision_id = drmdev->deviceinfo.pci->revision_id;
       drmFreeDevice(&drmdev);
-      return false;
    }
 
-   if ((min_ver > 0 && devinfo->ver < min_ver) || (max_ver > 0 && devinfo->ver > max_ver)) {
-      drmFreeDevice(&drmdev);
+   if ((min_ver > 0 && devinfo->ver < min_ver) || (max_ver > 0 && devinfo->ver > max_ver))
       return false;
-   }
 
-   devinfo->pci_domain = drmdev->businfo.pci->domain;
-   devinfo->pci_bus = drmdev->businfo.pci->bus;
-   devinfo->pci_dev = drmdev->businfo.pci->dev;
-   devinfo->pci_func = drmdev->businfo.pci->func;
-   devinfo->pci_device_id = drmdev->deviceinfo.pci->device_id;
-   devinfo->pci_revision_id = drmdev->deviceinfo.pci->revision_id;
-   drmFreeDevice(&drmdev);
    devinfo->no_hw = debug_get_bool_option("INTEL_NO_HW", false);
 
    devinfo->kmd_type = intel_get_kmd_type(fd);

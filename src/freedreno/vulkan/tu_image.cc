@@ -9,19 +9,19 @@
 
 #include "tu_image.h"
 
-#include "fdl/fd6_format_table.h"
-#include "common/freedreno_lrz.h"
+#include "drm-uapi/drm_fourcc.h"
 
-#include "util/u_debug.h"
 #include "util/format/u_format.h"
+#include "util/u_debug.h"
 #include "vk_android.h"
 #include "vk_debug_utils.h"
 #include "vk_util.h"
-#include "drm-uapi/drm_fourcc.h"
+#include "vk_ycbcr_conversion.h"
 #include "vulkan/vulkan_core.h"
 
+#include "common/freedreno_lrz.h"
+#include "fdl/fd6_format_table.h"
 #include "fdl/freedreno_layout.h"
-
 #include "tu_buffer.h"
 #include "tu_cs.h"
 #include "tu_descriptor_set.h"
@@ -29,6 +29,7 @@
 #include "tu_formats.h"
 #include "tu_lrz.h"
 #include "tu_rmv.h"
+#include "tu_subsampled_image.h"
 #include "tu_wsi.h"
 
 uint32_t
@@ -141,28 +142,10 @@ tu_layer_address(const struct fdl6_view *iview, uint32_t layer)
    return iview->base_addr + iview->layer_size * layer;
 }
 
-void
-tu_cs_image_ref(struct tu_cs *cs, const struct fdl6_view *iview, uint32_t layer)
+uint64_t
+tu_layer_flag_address(const struct fdl6_view *iview, uint32_t layer)
 {
-   tu_cs_emit(cs, A6XX_RB_MRT_PITCH(0, iview->pitch).value);
-   tu_cs_emit(cs, iview->layer_size >> 6);
-   tu_cs_emit_qw(cs, tu_layer_address(iview, layer));
-}
-
-void
-tu_cs_image_stencil_ref(struct tu_cs *cs, const struct tu_image_view *iview, uint32_t layer)
-{
-   tu_cs_emit(cs, A6XX_RB_STENCIL_BUFFER_PITCH(iview->stencil_pitch).value);
-   tu_cs_emit(cs, iview->stencil_layer_size >> 6);
-   tu_cs_emit_qw(cs, iview->stencil_base_addr + iview->stencil_layer_size * layer);
-}
-
-void
-tu_cs_image_depth_ref(struct tu_cs *cs, const struct tu_image_view *iview, uint32_t layer)
-{
-   tu_cs_emit(cs, A6XX_RB_DEPTH_BUFFER_PITCH(iview->depth_pitch).value);
-   tu_cs_emit(cs, iview->depth_layer_size >> 6);
-   tu_cs_emit_qw(cs, iview->depth_base_addr + iview->depth_layer_size * layer);
+   return iview->ubwc_addr + iview->ubwc_layer_size * layer;
 }
 
 template <chip CHIP>
@@ -181,7 +164,7 @@ TU_GENX(tu_cs_image_ref_2d);
 void
 tu_cs_image_flag_ref(struct tu_cs *cs, const struct fdl6_view *iview, uint32_t layer)
 {
-   tu_cs_emit_qw(cs, iview->ubwc_addr + iview->ubwc_layer_size * layer);
+   tu_cs_emit_qw(cs, tu_layer_flag_address(iview, layer));
    tu_cs_emit(cs, iview->FLAG_BUFFER_PITCH);
 }
 
@@ -198,6 +181,8 @@ tu_image_view_init(struct tu_device *device,
       vk_find_struct_const(pCreateInfo->pNext, SAMPLER_YCBCR_CONVERSION_INFO);
    const struct vk_ycbcr_conversion *conversion = ycbcr_conversion ?
       vk_ycbcr_conversion_from_handle(ycbcr_conversion->conversion) : NULL;
+   const VkImageViewSampleWeightCreateInfoQCOM *sample_weights =
+      vk_find_struct_const(pCreateInfo->pNext, IMAGE_VIEW_SAMPLE_WEIGHT_CREATE_INFO_QCOM);
 
    vk_image_view_init(&device->vk, &iview->vk, pCreateInfo);
    assert(iview->vk.format != VK_FORMAT_UNDEFINED);
@@ -284,6 +269,14 @@ tu_image_view_init(struct tu_device *device,
    if (conversion) {
       args.chroma_offsets[0] = (enum fdl_chroma_location) conversion->state.chroma_offsets[0];
       args.chroma_offsets[1] = (enum fdl_chroma_location) conversion->state.chroma_offsets[1];
+   }
+
+   if (sample_weights) {
+      args.filter_width = sample_weights->filterSize.width;
+      args.filter_height = sample_weights->filterSize.height;
+      args.filter_center_x = sample_weights->filterCenter.x;
+      args.filter_center_y = sample_weights->filterCenter.y;
+      args.filter_num_phases = sample_weights->numPhases;
    }
 
    TU_CALLX(device, fdl6_view_init)(&iview->view, layouts, &args, device->use_z24uint_s8uint);
@@ -423,6 +416,10 @@ ubwc_possible(struct tu_device *device,
       return false;
    }
 
+   if (format == VK_FORMAT_R64_UINT || format == VK_FORMAT_R64_SINT) {
+      return false;
+   }
+
    return true;
 }
 
@@ -546,6 +543,15 @@ tu_image_update_layout(struct tu_device *device, struct tu_image *image,
          /* no UBWC for separate stencil */
          image->ubwc_enabled = false;
 
+      /* Subsampled images with FDM offset require extra space for adjusting
+       * the offset to make the tiles aligned.
+       */
+      if ((image->vk.create_flags & VK_IMAGE_CREATE_SUBSAMPLED_BIT_EXT) &&
+          (image->vk.create_flags & VK_IMAGE_CREATE_FRAGMENT_DENSITY_MAP_OFFSET_BIT_EXT)) {
+         width0 += device->physical_device->info->tile_align_w;
+         height0 += device->physical_device->info->tile_align_h;
+      }
+
       struct fdl_explicit_layout plane_layout;
 
       if (plane_layouts) {
@@ -579,6 +585,7 @@ tu_image_update_layout(struct tu_device *device, struct tu_image *image,
          .sparse = image->vk.create_flags &
             VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT,
          .force_disable_linear_fallback = image->force_disable_linear_fallback,
+         .plane = i,
       };
 
       if (!fdl6_layout_image(layout, &device->physical_device->dev_info,
@@ -639,6 +646,12 @@ tu_image_update_layout(struct tu_device *device, struct tu_image *image,
    } else {
       image->lrz_layout.lrz_height = 0;
       image->lrz_layout.lrz_total_size = 0;
+   }
+
+   if (image->vk.create_flags & VK_IMAGE_CREATE_SUBSAMPLED_BIT_EXT) {
+      image->subsampled_metadata_offset = align64(image->total_size, 16);
+      image->total_size = image->subsampled_metadata_offset +
+         image->vk.array_layers * sizeof(struct tu_subsampled_metadata);
    }
 
    return VK_SUCCESS;
@@ -822,6 +835,63 @@ tu_image_init(struct tu_device *device, struct tu_image *image,
    return VK_SUCCESS;
 }
 
+/* Deferred ANB image support for ANB v8+ aliased images. */
+#ifdef VK_USE_PLATFORM_ANDROID_KHR
+static VkResult
+tu_android_get_wsi_memory(struct tu_device *dev,
+                          const VkBindImageMemoryInfo *bind_info,
+                          VkDeviceMemory *out_mem_handle)
+{
+   VK_FROM_HANDLE(tu_image, img, bind_info->image);
+   VkResult result;
+
+   assert(img->vk.android_deferred_create_info);
+
+   const VkNativeBufferANDROID *anb =
+      vk_find_struct_const(bind_info->pNext, NATIVE_BUFFER_ANDROID);
+
+   /* Inject ANB into the deferred pNext chain to leverage the existing common
+    * Android helper vk_android_get_anb_layout.
+    */
+   VkNativeBufferANDROID local_anb = *anb;
+   local_anb.pNext = img->vk.android_deferred_create_info->pNext;
+   img->vk.android_deferred_create_info->pNext = &local_anb;
+
+   VkImageDrmFormatModifierExplicitCreateInfoEXT eci;
+   VkSubresourceLayout a_plane_layouts[TU_MAX_PLANE_COUNT];
+   result = vk_android_get_anb_layout(img->vk.android_deferred_create_info,
+                                      &eci, a_plane_layouts,
+                                      TU_MAX_PLANE_COUNT);
+   if (result != VK_SUCCESS)
+      return result;
+
+   VkExternalMemoryImageCreateInfo external_info = {
+      .sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO,
+      .pNext = img->vk.android_deferred_create_info->pNext,
+      .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
+   };
+   img->vk.android_deferred_create_info->pNext = &external_info;
+
+   result = tu_image_init(dev, img, img->vk.android_deferred_create_info);
+   if (result != VK_SUCCESS)
+      return result;
+
+   result = TU_CALLX(dev, tu_image_update_layout)(
+      dev, img, eci.drmFormatModifier, a_plane_layouts);
+   if (result != VK_SUCCESS)
+      return result;
+
+   result = vk_android_import_anb_memory(&dev->vk, &img->vk, anb,
+                                         &dev->vk.alloc);
+   if (result != VK_SUCCESS)
+      return result;
+
+   *out_mem_handle = img->vk.anb_memory;
+
+   return VK_SUCCESS;
+}
+#endif /* VK_USE_PLATFORM_ANDROID_KHR */
+
 VKAPI_ATTR VkResult VKAPI_CALL
 tu_CreateImage(VkDevice _device,
                const VkImageCreateInfo *pCreateInfo,
@@ -834,26 +904,29 @@ tu_CreateImage(VkDevice _device,
 
    VK_FROM_HANDLE(tu_device, device, _device);
 
-#ifdef TU_USE_WSI_PLATFORM
-   /* Ignore swapchain creation info on Android. Since we don't have an
-    * implementation in Mesa, we're guaranteed to access an Android object
-    * incorrectly.
-    */
-   const VkImageSwapchainCreateInfoKHR *swapchain_info =
-      vk_find_struct_const(pCreateInfo->pNext, IMAGE_SWAPCHAIN_CREATE_INFO_KHR);
-   if (swapchain_info && swapchain_info->swapchain != VK_NULL_HANDLE) {
+   if (wsi_common_is_swapchain_image(pCreateInfo)) {
       return wsi_common_create_swapchain_image(device->physical_device->vk.wsi_device,
                                                pCreateInfo,
-                                               swapchain_info->swapchain,
                                                pImage);
    }
-#endif
 
    struct tu_image *image = (struct tu_image *)
       vk_image_create(&device->vk, pCreateInfo, alloc, sizeof(*image));
 
    if (!image)
       return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
+
+   if (vk_image_is_android_native_buffer_alias(&image->vk) ||
+       vk_image_is_android_hardware_buffer(&image->vk)) {
+      result = vk_android_init_deferred_image(&device->vk, &image->vk,
+                                              pCreateInfo, alloc);
+      if (result != VK_SUCCESS) {
+         vk_image_destroy(&device->vk, alloc, &image->vk);
+         return result;
+      }
+      *pImage = tu_image_to_handle(image);
+      return VK_SUCCESS;
+   }
 
    if (pCreateInfo->tiling == VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT) {
       const VkImageDrmFormatModifierListCreateInfoEXT *mod_info =
@@ -900,15 +973,6 @@ tu_CreateImage(VkDevice _device,
    result = tu_image_init(device, image, pCreateInfo);
    if (result != VK_SUCCESS)
       goto fail;
-
-   /* This section is removed by the optimizer for non-ANDROID builds */
-   if (vk_image_is_android_hardware_buffer(&image->vk)) {
-      /* At this time, an AHB handle is not yet provided.
-       * Image layout will be filled up during vkBindImageMemory2
-       */
-      *pImage = tu_image_to_handle(image);
-      return VK_SUCCESS;
-   }
 
    result = TU_CALLX(device, tu_image_update_layout)(device, image, modifier,
                                                     plane_layouts);
@@ -1009,37 +1073,27 @@ tu_image_bind(struct tu_device *device,
    VkResult result;
 
    if (!mem) {
-#if DETECT_OS_ANDROID
-      /* TODO handle VkNativeBufferANDROID */
-      UNREACHABLE("VkBindImageMemoryInfo with no memory");
+      VkDeviceMemory mem_handle;
+#ifdef VK_USE_PLATFORM_ANDROID_KHR
+      result = tu_android_get_wsi_memory(device, bind_info, &mem_handle);
+      if (result != VK_SUCCESS)
+         return result;
 #else
       const VkBindImageMemorySwapchainInfoKHR *swapchain_info =
          vk_find_struct_const(bind_info->pNext,
                               BIND_IMAGE_MEMORY_SWAPCHAIN_INFO_KHR);
       assert(swapchain_info && swapchain_info->swapchain != VK_NULL_HANDLE);
-      mem = tu_device_memory_from_handle(wsi_common_get_memory(
-         swapchain_info->swapchain, swapchain_info->imageIndex));
+      mem_handle = wsi_common_get_memory(swapchain_info->swapchain,
+                                         swapchain_info->imageIndex);
+#endif
+      mem = tu_device_memory_from_handle(mem_handle);
       /* memoryOffset is ignored when VkBindImageMemorySwapchainInfoKHR is
        * present, so we follow common wsi to set the offset to 0 here.
        */
       offset = 0;
-#endif
    }
 
    assert(mem);
-   if (vk_image_is_android_hardware_buffer(&image->vk)) {
-      VkImageDrmFormatModifierExplicitCreateInfoEXT eci;
-      VkSubresourceLayout a_plane_layouts[TU_MAX_PLANE_COUNT];
-      result = vk_android_get_ahb_layout(mem->vk.ahardware_buffer, &eci,
-                                         a_plane_layouts, TU_MAX_PLANE_COUNT);
-      if (result != VK_SUCCESS)
-         return result;
-
-      result = TU_CALLX(device, tu_image_update_layout)(
-         device, image, eci.drmFormatModifier, a_plane_layouts);
-      if (result != VK_SUCCESS)
-         return result;
-   }
    image->mem = mem;
    image->mem_offset = offset;
    image->iova = mem->iova + offset;
@@ -1455,8 +1509,8 @@ tu_fragment_density_map_sample(const struct tu_image_view *fdm,
 {
    assert(fdm->image->layout[0].tile_mode == TILE6_LINEAR);
 
-   uint32_t fdm_shift_x = util_logbase2_ceil(DIV_ROUND_UP(width, fdm->vk.extent.width));
-   uint32_t fdm_shift_y = util_logbase2_ceil(DIV_ROUND_UP(height, fdm->vk.extent.height));
+   uint32_t fdm_shift_x = util_logbase2_ceil(width / fdm->vk.extent.width);
+   uint32_t fdm_shift_y = util_logbase2_ceil(height / fdm->vk.extent.height);
 
    fdm_shift_x = CLAMP(fdm_shift_x, MIN_FDM_TEXEL_SIZE_LOG2, MAX_FDM_TEXEL_SIZE_LOG2);
    fdm_shift_y = CLAMP(fdm_shift_y, MIN_FDM_TEXEL_SIZE_LOG2, MAX_FDM_TEXEL_SIZE_LOG2);

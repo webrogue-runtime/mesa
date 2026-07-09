@@ -1047,7 +1047,12 @@ fn compile_nir_variant(
     }
     res.input_size = nir.uniform_size();
 
-    nir_pass!(nir, nir_lower_convert_alu_types, None);
+    nir_pass!(
+        nir,
+        nir_lower_convert_alu_types,
+        nir_options.lower_convert_alu_types
+    );
+    nir_pass!(nir, nir_opt_intrinsics);
 
     opt_nir(nir, dev, true);
 
@@ -1220,7 +1225,7 @@ pub(super) fn convert_spirv_to_nir(
     build: &DeviceProgramBuild,
     name: &str,
     args: &[spirv::SPIRVKernelArg],
-    spec_constants: &HashMap<u32, nir_const_value>,
+    spec_constants: &mut HashMap<u32, Vec<u8>>,
     dev: &'static Device,
 ) -> SPIRVToNirResult {
     let cache = dev.screen().shader_cache();
@@ -1441,6 +1446,8 @@ impl Kernel {
     ) {
         // We have to use the required workgroup size if specified.
         if self.work_group_size() != [0; 3] {
+            // This is not just a memcpy, clippy is wrong here
+            #[expect(clippy::manual_memcpy)]
             for i in 0..work_dim {
                 block[i] = self.work_group_size()[i];
                 grid[i] /= block[i];

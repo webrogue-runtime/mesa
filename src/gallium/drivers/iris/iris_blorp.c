@@ -1,26 +1,7 @@
 /*
  * Copyright © 2018 Intel Corporation
+ * SPDX-License-Identifier: MIT
  *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included
- * in all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
- * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
- */
-
-/**
  * @file iris_blorp.c
  *
  * ============================= GENXML CODE =============================
@@ -419,7 +400,7 @@ iris_blorp_exec_render(struct blorp_batch *blorp_batch,
    if (blorp_batch->flags & BLORP_BATCH_NO_EMIT_DEPTH_STENCIL)
       skip_bits |= IRIS_DIRTY_DEPTH_BUFFER;
 
-   if (!params->wm_prog_data)
+   if (!params->fs_prog_data)
       skip_bits |= IRIS_DIRTY_BLEND_STATE | IRIS_DIRTY_PS_BLEND;
 
    ice->state.dirty |= ~skip_bits;
@@ -532,6 +513,7 @@ genX(init_blorp)(struct iris_context *ice)
 #endif
    ice->blorp.lookup_shader = iris_blorp_lookup_shader;
    ice->blorp.upload_shader = iris_blorp_upload_shader;
+   ice->blorp.get_surface_address = blorp_get_surface_address;
    ice->blorp.exec = iris_blorp_exec;
    ice->blorp.enable_tbimr = screen->driconf.enable_tbimr;
 }

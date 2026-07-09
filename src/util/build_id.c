@@ -22,6 +22,7 @@
  */
 
 #include "build_id.h"
+#include "hex.h"
 
 #if HAVE_BUILD_ID
 #include <dlfcn.h>
@@ -188,4 +189,21 @@ build_id_data(const struct build_id_note *note)
 #endif /* DETECT_OS_APPLE */
 }
 
+void
+copy_build_id_to_sha1(uint8_t sha1[BLAKE3_KEY_LEN],
+                      const struct build_id_note *note)
+{
+   unsigned length = build_id_length(note);
+
+   assert(length <= BLAKE3_KEY_LEN);
+   memcpy(sha1, build_id_data(note), length);
+   memset(sha1 + length, 0, BLAKE3_KEY_LEN - length);
+}
+
 #endif
+
+void
+_mesa_sha1_format(char *buf, const unsigned char *sha1)
+{
+   mesa_bytes_to_hex(buf, sha1, BLAKE3_KEY_LEN);
+}

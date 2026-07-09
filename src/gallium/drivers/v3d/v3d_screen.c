@@ -207,13 +207,13 @@ v3d_init_compute_caps(struct v3d_screen *screen)
         /* GL_MAX_COMPUTE_WORK_GROUP_SIZE */
         caps->max_block_size[0] =
         caps->max_block_size[1] =
-        caps->max_block_size[2] = 256;
+        caps->max_block_size[2] = V3D_MAX_CSD_WG_SIZE;
 
         /* GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS: This is
          * limited by WG_SIZE in the CSD.
          */
         caps->max_threads_per_block =
-        caps->max_variable_threads_per_block = 256;
+        caps->max_variable_threads_per_block = V3D_MAX_CSD_WG_SIZE;
 
         /* GL_MAX_COMPUTE_SHARED_MEMORY_SIZE */
         caps->max_local_size = 32768;
@@ -392,6 +392,8 @@ v3d_init_screen_caps(struct v3d_screen *screen)
 
         caps->device_reset_status_query = screen->devinfo.has_reset_counter;
         caps->robust_buffer_access_behavior = true;
+
+        caps->sample_shading = true;
 
         /* FIXME: same settings as v3dv, maybe put them in a common place. */
         if (screen->devinfo.ver >= 71) {
@@ -588,12 +590,12 @@ v3d_screen_get_compiler_options(struct pipe_screen *pscreen,
                 .lower_fsqrt = true,
                 .lower_ifind_msb = true,
                 .lower_isign = true,
-                .lower_ldexp = true,
                 .lower_hadd = true,
                 .lower_fisnormal = true,
                 .lower_mul_high = true,
                 .lower_wpos_pntc = true,
                 .lower_to_scalar = true,
+                .lower_interpolate_at = true,
                 .lower_int64_options =
                         nir_lower_bcsel64 |
                         nir_lower_conv64 |
@@ -620,6 +622,7 @@ v3d_screen_get_compiler_options(struct pipe_screen *pscreen,
                  * limit register pressure impact.
                  */
                 .max_unroll_iterations = 16,
+                .max_samples = 4,
                 .force_indirect_unrolling_sampler = true,
                 .scalarize_ddx = true,
                 .max_varying_expression_cost = 4,
@@ -752,6 +755,7 @@ v3d_screen_get_compatible_tlb_format(struct pipe_screen *screen,
         }
 }
 
+#ifdef ENABLE_SHADER_CACHE
 static struct disk_cache *
 v3d_screen_get_disk_shader_cache(struct pipe_screen *pscreen)
 {
@@ -759,6 +763,7 @@ v3d_screen_get_disk_shader_cache(struct pipe_screen *pscreen)
 
         return screen->disk_cache;
 }
+#endif
 
 static int
 v3d_screen_get_fd(struct pipe_screen *pscreen)
@@ -836,7 +841,9 @@ v3d_screen_create(int fd, const struct pipe_screen_config *config,
         pscreen->get_name = v3d_screen_get_name;
         pscreen->get_vendor = v3d_screen_get_vendor;
         pscreen->get_device_vendor = v3d_screen_get_vendor;
+#ifdef ENABLE_SHADER_CACHE
         pscreen->get_disk_shader_cache = v3d_screen_get_disk_shader_cache;
+#endif
         pscreen->query_dmabuf_modifiers = v3d_screen_query_dmabuf_modifiers;
         pscreen->is_dmabuf_modifier_supported =
                 v3d_screen_is_dmabuf_modifier_supported;

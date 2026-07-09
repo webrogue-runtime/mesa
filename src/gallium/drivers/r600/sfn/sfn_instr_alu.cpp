@@ -1561,11 +1561,6 @@ static bool
 emit_alu_vec2_64(const nir_alu_instr& alu, Shader& shader);
 
 static bool
-emit_unpack_32_2x16_split_x(const nir_alu_instr& alu, Shader& shader);
-static bool
-emit_unpack_32_2x16_split_y(const nir_alu_instr& alu, Shader& shader);
-
-static bool
 emit_dot(const nir_alu_instr& alu, int nelm, Shader& shader);
 static bool
 emit_dot4(const nir_alu_instr& alu, int nelm, Shader& shader);
@@ -1677,7 +1672,7 @@ AluInstr::from_nir(nir_alu_instr *alu, Shader& shader)
 
    if (shader.chip_class() == ISA_CC_CAYMAN) {
       switch (alu->op) {
-      case nir_op_fcos_amd:
+      case nir_op_fcos_normalized_2_pi:
          return emit_alu_trans_op1_cayman(*alu, op1_cos, shader);
       case nir_op_fexp2:
          return emit_alu_trans_op1_cayman(*alu, op1_exp_ieee, shader);
@@ -1689,7 +1684,7 @@ AluInstr::from_nir(nir_alu_instr *alu, Shader& shader)
          return emit_alu_trans_op1_cayman(*alu, op1_recipsqrt_ieee1, shader);
       case nir_op_fsqrt:
          return emit_alu_trans_op1_cayman(*alu, op1_sqrt_ieee, shader);
-      case nir_op_fsin_amd:
+      case nir_op_fsin_normalized_2_pi:
          return emit_alu_trans_op1_cayman(*alu, op1_sin, shader);
       case nir_op_i2f32:
          return emit_alu_op1(*alu, op1_int_to_flt, shader);
@@ -1751,7 +1746,7 @@ AluInstr::from_nir(nir_alu_instr *alu, Shader& shader)
          return emit_alu_trans_op1_eg(*alu, op1_flt_to_int, shader);
       case nir_op_f2u32:
          return emit_alu_trans_op1_eg(*alu, op1_flt_to_uint, shader);
-      case nir_op_fcos_amd:
+      case nir_op_fcos_normalized_2_pi:
          return emit_alu_trans_op1_eg(*alu, op1_cos, shader);
       case nir_op_fexp2:
          return emit_alu_trans_op1_eg(*alu, op1_exp_ieee, shader);
@@ -1761,7 +1756,7 @@ AluInstr::from_nir(nir_alu_instr *alu, Shader& shader)
          return emit_alu_trans_op1_eg(*alu, op1_recip_ieee, shader);
       case nir_op_frsq:
          return emit_alu_trans_op1_eg(*alu, op1_recipsqrt_ieee1, shader);
-      case nir_op_fsin_amd:
+      case nir_op_fsin_normalized_2_pi:
          return emit_alu_trans_op1_eg(*alu, op1_sin, shader);
       case nir_op_fsqrt:
          return emit_alu_trans_op1_eg(*alu, op1_sqrt_ieee, shader);
@@ -1788,6 +1783,12 @@ AluInstr::from_nir(nir_alu_instr *alu, Shader& shader)
       return emit_alu_b2x(*alu, ALU_SRC_1, shader);
    case nir_op_b2i32:
       return emit_alu_b2x(*alu, ALU_SRC_1_INT, shader);
+   case nir_op_u2u16:
+      assert(alu->src[0].src.ssa->bit_size == 32);
+      return emit_alu_op1(*alu, op1_mov, shader);
+   case nir_op_f2f32:
+      assert(alu->src[0].src.ssa->bit_size == 16);
+      return emit_alu_op1(*alu, op1_flt16_to_flt32, shader);
 
    case nir_op_bfm:
       return emit_alu_op2_int(*alu, op2_bfm_int, shader, op2_opt_none);
@@ -1954,10 +1955,6 @@ AluInstr::from_nir(nir_alu_instr *alu, Shader& shader)
       return emit_unpack_64_2x32_split(*alu, 0, shader);
    case nir_op_unpack_64_2x32_split_y:
       return emit_unpack_64_2x32_split(*alu, 1, shader);
-   case nir_op_unpack_half_2x16_split_x:
-      return emit_unpack_32_2x16_split_x(*alu, shader);
-   case nir_op_unpack_half_2x16_split_y:
-      return emit_unpack_32_2x16_split_y(*alu, shader);
 
    case nir_op_ffma:
       if (!shader.has_flag(Shader::sh_legacy_math_rules))
@@ -2696,34 +2693,6 @@ emit_unpack_64_2x32_split(const nir_alu_instr& alu, int comp, Shader& shader)
    shader.emit_instruction(new AluInstr(op1_mov,
                                         value_factory.dest(alu.def, 0, pin_free),
                                         value_factory.src64(alu.src[0], 0, comp),
-                                        AluInstr::write));
-   return true;
-}
-
-static bool
-emit_unpack_32_2x16_split_x(const nir_alu_instr& alu, Shader& shader)
-{
-   auto& value_factory = shader.value_factory();
-   shader.emit_instruction(new AluInstr(op1_flt16_to_flt32,
-                                        value_factory.dest(alu.def, 0, pin_free),
-                                        value_factory.src(alu.src[0], 0),
-                                        AluInstr::write));
-   return true;
-}
-static bool
-emit_unpack_32_2x16_split_y(const nir_alu_instr& alu, Shader& shader)
-{
-   auto& value_factory = shader.value_factory();
-   auto tmp = value_factory.temp_register();
-   shader.emit_instruction(new AluInstr(op2_lshr_int,
-                                        tmp,
-                                        value_factory.src(alu.src[0], 0),
-                                        value_factory.literal(16),
-                                        AluInstr::write));
-
-   shader.emit_instruction(new AluInstr(op1_flt16_to_flt32,
-                                        value_factory.dest(alu.def, 0, pin_free),
-                                        tmp,
                                         AluInstr::write));
    return true;
 }

@@ -192,13 +192,13 @@ anv_direct_descriptor_data_for_type(const struct anv_physical_device *device,
    }
 
    if (layout_type == ANV_PIPELINE_DESCRIPTOR_SET_LAYOUT_TYPE_BUFFER) {
-      if (set_flags & VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR) {
+      if (set_flags & VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT) {
          /* Push descriptors are special with descriptor buffers. On Gfx12.5+
           * they have their own pool and are not reachable by the binding
           * table. On previous generations, they are only reachable through
           * the binding table.
           */
-         if (device->uses_ex_bso) {
+         if (intel_has_extended_bindless(&device->info)) {
             data &= ~(ANV_DESCRIPTOR_BTI_SURFACE_STATE |
                       ANV_DESCRIPTOR_BTI_SAMPLER_STATE);
          }
@@ -414,8 +414,8 @@ anv_descriptor_data_supports_bindless(const struct anv_physical_device *pdevice,
        * bindless offset, all push descriptors have to go through the binding
        * tables.
        */
-      if (!pdevice->uses_ex_bso &&
-          (set_flags & VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR)) {
+      if (!intel_has_extended_bindless(&pdevice->info) &&
+          (set_flags & VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT)) {
          return data & (ANV_DESCRIPTOR_INDIRECT_ADDRESS_RANGE |
                         ANV_DESCRIPTOR_INDIRECT_SAMPLED_IMAGE |
                         ANV_DESCRIPTOR_INDIRECT_STORAGE_IMAGE);
@@ -448,10 +448,10 @@ anv_descriptor_requires_bindless(const struct anv_physical_device *pdevice,
                                  const struct anv_descriptor_set_layout *set,
                                  const struct anv_descriptor_set_binding_layout *binding)
 {
-   if (pdevice->instance->debug & ANV_DEBUG_BINDLESS)
+   if (ANV_DEBUG(BINDLESS))
       return anv_descriptor_supports_bindless(pdevice, set, binding);
 
-   if (set->vk.flags & VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR)
+   if (set->vk.flags & VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT)
       return false;
 
    if (set->vk.flags & (VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT |
@@ -812,14 +812,14 @@ VkResult anv_CreateDescriptorSetLayout(
          /* From the Vulkan spec:
           *
           *    "If VkDescriptorSetLayoutCreateInfo::flags includes
-          *    VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR, then
+          *    VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT, then
           *    all elements of pBindingFlags must not include
           *    VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
           *    VK_DESCRIPTOR_BINDING_UPDATE_UNUSED_WHILE_PENDING_BIT, or
           *    VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT"
           */
          if (pCreateInfo->flags &
-             VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR) {
+             VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT) {
             assert(!(set_layout->binding[b].flags &
                (VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT |
                 VK_DESCRIPTOR_BINDING_UPDATE_UNUSED_WHILE_PENDING_BIT |
@@ -1134,6 +1134,8 @@ anv_descriptor_pool_heap_init(struct anv_device *device,
       ANV_DMR_BO_ALLOC(&pool->base, heap->bo, result);
       if (result != VK_SUCCESS)
          return vk_error(device, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+
+      ANV_ADDR_BINDING_REPORT_BO_BIND(device, &pool->base, heap->bo);
    }
 
    util_vma_heap_init(&heap->heap, POOL_HEAP_OFFSET, heap->size);
@@ -1151,6 +1153,7 @@ anv_descriptor_pool_heap_fini(struct anv_device *device, struct anv_descriptor_p
    util_vma_heap_finish(&heap->heap);
 
    if (heap->bo) {
+      ANV_ADDR_BINDING_REPORT_BO_UNBIND(device, &pool->base, heap->bo);
       ANV_DMR_BO_FREE(&pool->base, heap->bo);
       anv_device_release_bo(device, heap->bo);
    }
@@ -1852,10 +1855,10 @@ anv_push_descriptor_set_init(struct anv_cmd_buffer *cmd_buffer,
       uint64_t push_base_address;
 
       if (layout->vk.flags & VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT) {
-         push_stream = pdevice->uses_ex_bso ?
+         push_stream = intel_has_extended_bindless(&pdevice->info) ?
             &cmd_buffer->push_descriptor_buffer_stream :
             &cmd_buffer->surface_state_stream;
-         push_base_address = pdevice->uses_ex_bso ?
+         push_base_address = intel_has_extended_bindless(&pdevice->info) ?
             pdevice->va.push_descriptor_buffer_pool.addr :
             pdevice->va.internal_surface_state_pool.addr;
       } else {
@@ -1943,24 +1946,6 @@ anv_push_descriptor_set_finish(struct anv_push_descriptor_set *push_set)
    }
 }
 
-static uint32_t
-anv_surface_state_to_handle(struct anv_physical_device *device,
-                            struct anv_state state)
-{
-   /* Bits 31:12 of the bindless surface offset in the extended message
-    * descriptor is bits 25:6 of the byte-based address.
-    */
-   assert(state.offset >= 0);
-   uint32_t offset = state.offset;
-   if (device->uses_ex_bso) {
-      assert(util_is_aligned(offset, 64));
-      return offset;
-   } else {
-      assert(util_is_aligned(offset, 64) && offset < (1 << 26));
-      return offset << 6;
-   }
-}
-
 static const void *
 anv_image_view_surface_data_for_plane_layout(struct anv_image_view *image_view,
                                              VkDescriptorType desc_type,
@@ -1971,7 +1956,7 @@ anv_image_view_surface_data_for_plane_layout(struct anv_image_view *image_view,
        desc_type == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE ||
        desc_type == VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT) {
       return (layout == VK_IMAGE_LAYOUT_GENERAL ||
-              layout == VK_IMAGE_LAYOUT_RENDERING_LOCAL_READ_KHR) ?
+              layout == VK_IMAGE_LAYOUT_RENDERING_LOCAL_READ) ?
          &image_view->planes[plane].general_sampler.state_data :
          &image_view->planes[plane].optimal_sampler.state_data;
    }
@@ -2849,7 +2834,7 @@ void anv_GetDescriptorEXT(
                                        format.isl_format, format.swizzle,
                                        ISL_SURF_USAGE_TEXTURE_BIT,
                                        anv_address_from_u64(addr_info->address),
-                                       align_down_npot_u32(addr_info->range, format_bs),
+                                       align_down_npot_u64(addr_info->range, format_bs),
                                        format_bs);
       } else {
          memcpy(pDescriptor, device->host_null_surface_state,
@@ -2874,7 +2859,7 @@ void anv_GetDescriptorEXT(
                                        format.isl_format, format.swizzle,
                                        ISL_SURF_USAGE_STORAGE_BIT,
                                        anv_address_from_u64(addr_info->address),
-                                       align_down_npot_u32(addr_info->range, format_bs),
+                                       align_down_npot_u64(addr_info->range, format_bs),
                                        format_bs);
       } else {
          memcpy(pDescriptor, device->host_null_surface_state,

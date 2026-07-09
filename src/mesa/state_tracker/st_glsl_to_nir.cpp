@@ -112,10 +112,29 @@ st_nir_lookup_parameter_index(struct gl_program *prog, nir_variable *var)
    return -1;
 }
 
+void
+st_update_state_param_locations(struct gl_context *ctx,
+                                struct gl_program *prog, nir_shader *nir)
+{
+   nir_foreach_variable_with_modes(uniform, nir, nir_var_uniform) {
+      if (uniform->state_slots) {
+         const gl_state_index16 *const stateTokens = uniform->state_slots[0].tokens;
+
+         int loc = _mesa_lookup_state_param_idx(prog->Parameters, stateTokens);
+         assert(loc >= 0);
+         if (ctx->Const.PackedDriverUniformStorage) {
+            uniform->data.driver_location =
+               prog->Parameters->Parameters[loc].ValueOffset;
+         } else
+            uniform->data.driver_location = loc;
+      }
+   }
+}
+
 static void
 st_nir_assign_uniform_locations(struct st_context *st,
                                 struct gl_program *prog,
-                                nir_shader *nir, bool is_before_variants)
+                                nir_shader *nir)
 {
    struct gl_context *ctx = st->ctx;
    int shaderidx = 0;
@@ -135,25 +154,8 @@ st_nir_assign_uniform_locations(struct st_context *st,
             imageidx += type_size(uniform->type);
          }
       } else if (uniform->state_slots) {
-         if (st->allow_st_finalize_nir_twice && !is_before_variants)
-            continue;
-
-         const gl_state_index16 *const stateTokens = uniform->state_slots[0].tokens;
-
-         unsigned comps;
-         if (glsl_type_is_struct_or_ifc(type)) {
-            comps = 4;
-         } else {
-            comps = glsl_get_vector_elements(type);
-         }
-
-         if (ctx->Const.PackedDriverUniformStorage) {
-            loc = _mesa_add_sized_state_reference(prog->Parameters,
-                                                  stateTokens, comps, false);
-            loc = prog->Parameters->Parameters[loc].ValueOffset;
-         } else {
-            loc = _mesa_add_state_reference(prog->Parameters, stateTokens);
-         }
+         /* State vars should have been handled already */
+         continue;
       } else {
          loc = st_nir_lookup_parameter_index(prog, uniform);
 
@@ -364,13 +366,14 @@ st_glsl_to_nir_post_opts(struct st_context *st, struct gl_program *prog,
 
    st_set_prog_affected_state_flags(prog);
    nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
+   st_update_state_param_locations(st->ctx, prog, nir);
 
    if (st->allow_st_finalize_nir_twice) {
       st_serialize_base_nir(prog, nir);
       st_finalize_nir(st, prog, shader_program, nir, true, false);
 
       if (screen->finalize_nir)
-         screen->finalize_nir(screen, nir);
+         screen->finalize_nir(screen, nir, false);
    }
 
    if (st->ctx->_Shader->Flags & GLSL_DUMP) {
@@ -735,7 +738,7 @@ st_finalize_nir(struct st_context *st, struct gl_program *prog,
       NIR_PASS(_, nir, nir_lower_tex, &opts);
    }
 
-   st_nir_assign_uniform_locations(st, prog, nir, is_before_variants);
+   st_nir_assign_uniform_locations(st, prog, nir);
 
    /* Set num_uniforms in number of attribute slots (vec4s) */
    nir->num_uniforms = DIV_ROUND_UP(prog->Parameters->NumParameterValues, 4);
@@ -752,7 +755,7 @@ st_finalize_nir(struct st_context *st, struct gl_program *prog,
 
    st_nir_lower_samplers(screen, nir, shader_program, prog);
    if (!is_draw_shader && !screen->caps.nir_images_as_deref)
-      NIR_PASS(_, nir, gl_nir_lower_images, false);
+      NIR_PASS(_, nir, gl_nir_lower_images, NULL, false);
 }
 
 /**

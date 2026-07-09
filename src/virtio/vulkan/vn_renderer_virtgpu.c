@@ -727,7 +727,10 @@ virtgpu_ioctl_prime_fd_to_handle(struct virtgpu *gpu, int fd)
 }
 
 static void *
-virtgpu_ioctl_map(struct virtgpu *gpu, uint32_t gem_handle, size_t size)
+virtgpu_ioctl_map(struct virtgpu *gpu,
+                  uint32_t gem_handle,
+                  size_t size,
+                  void *placed_addr)
 {
    struct drm_virtgpu_map args = {
       .handle = gem_handle,
@@ -739,13 +742,14 @@ virtgpu_ioctl_map(struct virtgpu *gpu, uint32_t gem_handle, size_t size)
       return NULL;
    }
 
-   void *ptr = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, gpu->fd,
-                    args.offset);
+   void *ptr =
+      mmap(placed_addr, size, PROT_READ | PROT_WRITE,
+           MAP_SHARED | (placed_addr ? MAP_FIXED : 0), gpu->fd, args.offset);
    if (ptr == MAP_FAILED) {
       vn_log(
          gpu->instance,
          "mmap failed: gpu_fd=%d, handle=%u, size=%zu, offset=%llu, err=%s",
-         gpu->fd, gem_handle, size, args.offset, strerror(errno));
+         gpu->fd, gem_handle, size, (long long)args.offset, strerror(errno));
       return NULL;
    }
 
@@ -1101,7 +1105,9 @@ virtgpu_bo_flush(struct vn_renderer *renderer,
 }
 
 static void *
-virtgpu_bo_map(struct vn_renderer *renderer, struct vn_renderer_bo *_bo)
+virtgpu_bo_map(struct vn_renderer *renderer,
+               struct vn_renderer_bo *_bo,
+               void *placed_addr)
 {
    struct virtgpu *gpu = (struct virtgpu *)renderer;
    struct virtgpu_bo *bo = (struct virtgpu_bo *)_bo;
@@ -1109,8 +1115,8 @@ virtgpu_bo_map(struct vn_renderer *renderer, struct vn_renderer_bo *_bo)
 
    /* not thread-safe but is fine */
    if (!bo->base.mmap_ptr && mappable) {
-      bo->base.mmap_ptr =
-         virtgpu_ioctl_map(gpu, bo->gem_handle, bo->base.mmap_size);
+      bo->base.mmap_ptr = virtgpu_ioctl_map(gpu, bo->gem_handle,
+                                            bo->base.mmap_size, placed_addr);
    }
 
    return bo->base.mmap_ptr;
@@ -1393,7 +1399,7 @@ virtgpu_shmem_create(struct vn_renderer *renderer, size_t size)
    if (!gem_handle)
       return NULL;
 
-   void *ptr = virtgpu_ioctl_map(gpu, gem_handle, size);
+   void *ptr = virtgpu_ioctl_map(gpu, gem_handle, size, NULL);
    if (!ptr) {
       virtgpu_ioctl_gem_close(gpu, gem_handle);
       return NULL;
@@ -1790,6 +1796,8 @@ virtgpu_init(struct virtgpu *gpu)
    gpu->base.bo_ops.create_from_dma_buf = virtgpu_bo_create_from_dma_buf;
    gpu->base.bo_ops.destroy = virtgpu_bo_destroy;
    gpu->base.bo_ops.export_dma_buf = virtgpu_bo_export_dma_buf;
+   gpu->base.bo_ops.export_sync_file =
+      vn_renderer_bo_export_sync_file_internal;
    gpu->base.bo_ops.map = virtgpu_bo_map;
    gpu->base.bo_ops.flush = virtgpu_bo_flush;
    gpu->base.bo_ops.invalidate = virtgpu_bo_invalidate;

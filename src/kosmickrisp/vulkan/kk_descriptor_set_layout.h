@@ -32,9 +32,6 @@ struct kk_descriptor_set_binding_layout {
     */
    uint32_t array_size;
 
-   /* Number of actual descriptors per element */
-   uint32_t count_per_element;
-
    /* Offset into the descriptor buffer where this descriptor lives */
    uint32_t offset;
 
@@ -59,9 +56,6 @@ struct kk_descriptor_set_layout {
 
    /* Maximum possible buffer size for this descriptor set */
    uint32_t max_buffer_size;
-
-   /* Number of dynamic UBO bindings in this set */
-   uint8_t dynamic_buffer_count;
 
    /* Which dynamic buffers are UBOs */
    BITSET_DECLARE(dynamic_ubos, KK_MAX_DYNAMIC_BUFFERS);

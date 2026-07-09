@@ -38,7 +38,6 @@ panvk_tracepoints = custom_target(
 libpanvk_files = files(
   'panvk_buffer.c',
   'panvk_cmd_pool.c',
-  'panvk_device.c',
   'panvk_device_memory.c',
   'panvk_host_copy.c',
   'panvk_image.c',
@@ -46,6 +45,7 @@ libpanvk_files = files(
   'panvk_mempool.c',
   'panvk_physical_device.c',
   'panvk_priv_bo.c',
+  'panvk_sparse.c',
   'panvk_utrace.c',
   'panvk_wsi.c',
 )
@@ -65,9 +65,9 @@ valhall_archs = [9, 10]
 valhall_inc_dir = ['valhall']
 valhall_files = []
 
-avalon_archs = [12, 13]
-avalon_inc_dir = ['avalon']
-avalon_files = []
+fifthgen_archs = [12, 13]
+fifthgen_inc_dir = ['fifthgen']
+fifthgen_files = []
 
 jm_archs = [6, 7]
 jm_inc_dir = ['jm']
@@ -88,6 +88,7 @@ csf_inc_dir = ['csf']
 csf_files = [
   'csf/panvk_vX_bind_queue.c',
   'csf/panvk_vX_cmd_buffer.c',
+  'csf/panvk_vX_cmd_cond_render.c',
   'csf/panvk_vX_cmd_dispatch.c',
   'csf/panvk_vX_cmd_draw.c',
   'csf/panvk_vX_cmd_event.c',
@@ -105,10 +106,10 @@ common_per_arch_files = [
   panvk_tracepoints[0],
   'panvk_vX_blend.c',
   'panvk_vX_buffer_view.c',
-  'panvk_vX_cmd_fb_preload.c',
   'panvk_vX_cmd_desc_state.c',
   'panvk_vX_cmd_dispatch.c',
   'panvk_vX_cmd_draw.c',
+  'panvk_vX_cmd_frame_shaders.c',
   'panvk_vX_cmd_meta.c',
   'panvk_vX_cmd_push_constant.c',
   'panvk_vX_descriptor_set.c',
@@ -119,6 +120,7 @@ common_per_arch_files = [
   'panvk_vX_query_pool.c',
   'panvk_vX_image_view.c',
   'panvk_vX_nir_lower_descriptors.c',
+  'panvk_vX_nir_lower_input_attachment_loads.c',
   'panvk_vX_sampler.c',
   'panvk_vX_shader.c',
   sha1_h,
@@ -134,9 +136,9 @@ foreach arch : [6, 7, 10, 12, 13]
   elif arch in valhall_archs
     inc_panvk_per_arch += valhall_inc_dir
     per_arch_files += valhall_files
-  elif arch in avalon_archs
-    inc_panvk_per_arch += avalon_inc_dir
-    per_arch_files += avalon_files
+  elif arch in fifthgen_archs
+    inc_panvk_per_arch += fifthgen_inc_dir
+    per_arch_files += fifthgen_files
   endif
 
   if arch in jm_archs
@@ -196,11 +198,9 @@ libvulkan_panfrost = shared_library(
   link_whole : [panvk_per_arch_libs],
   link_with : [
     libpanfrost_shared,
-    libpanfrost_midgard,
-    libpanfrost_bifrost,
     libpanfrost_decode,
     libpanfrost_lib,
-    libpanfrost_util,
+    libpanfrost_compiler,
   ],
   dependencies : [
     dep_dl,
@@ -273,5 +273,3 @@ _dev_icd = custom_target(
 )
 
 devenv.append('VK_DRIVER_FILES', _dev_icd.full_path())
-# Deprecated: replaced by VK_DRIVER_FILES above
-devenv.append('VK_ICD_FILENAMES', _dev_icd.full_path())

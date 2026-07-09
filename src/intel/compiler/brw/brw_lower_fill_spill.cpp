@@ -23,7 +23,7 @@ build_ex_desc(const brw_builder &bld, unsigned reg_size, bool unspill)
             brw_imm_ud(INTEL_MASK(31, 10)));
 
    const intel_device_info *devinfo = bld.shader->devinfo;
-   if (devinfo->verx10 >= 200) {
+   if (devinfo->ver >= 20 || intel_has_extended_bindless(devinfo)) {
       ubld.SHR(ex_desc, ex_desc, brw_imm_ud(4));
    } else {
       if (unspill) {
@@ -77,13 +77,14 @@ brw_lower_lsc_fill(const intel_device_info *devinfo, brw_shader &s,
 
    unspill_inst->sfid = BRW_SFID_UGM;
    unspill_inst->header_size = 0;
-   unspill_inst->mlen = lsc_msg_addr_len(devinfo, LSC_ADDR_SIZE_A32,
+   unspill_inst->mlen = brw_lsc_msg_addr_len(devinfo, LSC_ADDR_SIZE_A32,
                                          unspill_inst->exec_size);
    unspill_inst->ex_mlen = 0;
    unspill_inst->size_written =
-      lsc_msg_dest_len(devinfo, LSC_DATA_SIZE_D32, bld.dispatch_width()) * REG_SIZE;
+      brw_lsc_msg_dest_len(devinfo, LSC_DATA_SIZE_D32, bld.dispatch_width()) * REG_SIZE;
    unspill_inst->has_side_effects = false;
    unspill_inst->is_volatile = true;
+   unspill_inst->bindless_surface = true;
 
    unspill_inst->src[0] = brw_imm_ud(
       desc |
@@ -130,12 +131,13 @@ brw_lower_lsc_spill(const intel_device_info *devinfo, brw_inst *inst)
                                 false /* transpose */,
                                 LSC_CACHE(devinfo, LOAD, L1STATE_L3MOCS));
    spill_inst->header_size = 0;
-   spill_inst->mlen = lsc_msg_addr_len(devinfo, LSC_ADDR_SIZE_A32,
+   spill_inst->mlen = brw_lsc_msg_addr_len(devinfo, LSC_ADDR_SIZE_A32,
                                        bld.dispatch_width());
    spill_inst->ex_mlen = reg_size;
    spill_inst->size_written = 0;
    spill_inst->has_side_effects = true;
    spill_inst->is_volatile = false;
+   spill_inst->bindless_surface = true;
 
    spill_inst->src[0] = brw_imm_ud(
       desc |

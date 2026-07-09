@@ -95,6 +95,7 @@ nvk_create_cmd_buffer(struct vk_command_pool *vk_pool,
    list_inithead(&cmd->owned_gart_mem);
    list_inithead(&cmd->owned_qmd);
    cmd->pushes = UTIL_DYNARRAY_INIT;
+   cmd->copy_memory_indirect_temps = UTIL_DYNARRAY_INIT;
 
    cmd->prev_subc = ffs(nvk_cmd_buffer_subchannel_mask(cmd)) - 1;
 
@@ -126,6 +127,7 @@ nvk_reset_cmd_buffer(struct vk_command_buffer *vk_cmd_buffer,
    cmd->cond_render_mem = NULL;
 
    util_dynarray_clear(&cmd->pushes);
+   util_dynarray_clear(&cmd->copy_memory_indirect_temps);
 
    memset(&cmd->state, 0, sizeof(cmd->state));
 }
@@ -529,6 +531,10 @@ nvk_cmd_flush_wait_dep(struct nvk_cmd_buffer *cmd,
                        const VkDependencyInfo *dep,
                        bool wait)
 {
+   VkQueueFlags queue_flags = nvk_cmd_buffer_queue_flags(cmd);
+   enum nvkmd_engines engines =
+      nvk_queue_engines_from_queue_flags(queue_flags);
+
    enum nvk_barrier barriers = 0;
 
    /* For asymmetric, we don't know what the access flags will be yet.
@@ -563,6 +569,9 @@ nvk_cmd_flush_wait_dep(struct nvk_cmd_buffer *cmd,
       barriers |= nvk_barrier_flushes_waits(bar->srcStageMask,
                                             bar->srcAccessMask);
    }
+
+   if (!(engines & (NVKMD_ENGINE_3D | NVKMD_ENGINE_COMPUTE)))
+      barriers &= ~NVK_BARRIER_FLUSH_SHADER_DATA;
 
    if (!barriers)
       return;
@@ -655,6 +664,20 @@ nvk_cmd_invalidate_deps(struct nvk_cmd_buffer *cmd,
       }
    }
 
+   VkQueueFlags queue_flags = nvk_cmd_buffer_queue_flags(cmd);
+   enum nvkmd_engines engines =
+      nvk_queue_engines_from_queue_flags(queue_flags);
+
+   if (!(engines & (NVKMD_ENGINE_3D | NVKMD_ENGINE_COMPUTE)))
+      barriers &= ~(NVK_BARRIER_INVALIDATE_TEX_DATA |
+                    NVK_BARRIER_INVALIDATE_RASTER_CACHE |
+                    NVK_BARRIER_INVALIDATE_SHADER_DATA |
+                    NVK_BARRIER_INVALIDATE_CONSTANT |
+                    NVK_BARRIER_INVALIDATE_MME_DATA);
+
+   if (!(engines & NVKMD_ENGINE_COMPUTE))
+      barriers &= ~NVK_BARRIER_INVALIDATE_QMD_DATA;
+
    if (!barriers)
       return;
 
@@ -693,7 +716,7 @@ nvk_cmd_invalidate_deps(struct nvk_cmd_buffer *cmd,
        dev->vk.enabled_features.pipelineFragmentShadingRate)
       P_IMMD(p, NVC597, INVALIDATE_RASTER_CACHE_NO_WFI, 0);
 
-   if (barriers & (NVK_BARRIER_INVALIDATE_SHADER_DATA &
+   if (barriers & (NVK_BARRIER_INVALIDATE_SHADER_DATA |
                    NVK_BARRIER_INVALIDATE_CONSTANT)) {
       if (nvk_cmd_buffer_last_subchannel(cmd) == SUBC_NVA097) {
          P_IMMD(p, NVA097, INVALIDATE_SHADER_CACHES_NO_WFI, {
@@ -731,6 +754,25 @@ nvk_cmd_invalidate_deps(struct nvk_cmd_buffer *cmd,
       P_IMMD(p, NVB1C0, INVALIDATE_SKED_CACHES, 0);
 }
 
+static void
+nvk_cmd_image_layout_transition(struct nvk_cmd_buffer *cmd,
+                                const VkDependencyInfo *dep)
+{
+   for (uint32_t i = 0; i < dep->imageMemoryBarrierCount; i++) {
+      const VkImageMemoryBarrier2 *bar = &dep->pImageMemoryBarriers[i];
+      if (bar->oldLayout == VK_IMAGE_LAYOUT_UNDEFINED &&
+          bar->newLayout != VK_IMAGE_LAYOUT_UNDEFINED) {
+         VK_FROM_HANDLE(nvk_image, image, bar->image);
+         /*
+          * zcull hardware kills the context if we try to LOAD_ZCULL on garbage
+          * data. Handle this by initializing the zcull data to zero.
+          */
+         if (image->zcull.nil.size_B > 0)
+            nvk_cmd_fill_memory(cmd, image->zcull.addr, image->zcull.nil.size_B, 0);
+      }
+   }
+}
+
 VKAPI_ATTR void VKAPI_CALL
 nvk_CmdPipelineBarrier2(VkCommandBuffer commandBuffer,
                         const VkDependencyInfo *pDependencyInfo)
@@ -738,6 +780,7 @@ nvk_CmdPipelineBarrier2(VkCommandBuffer commandBuffer,
    VK_FROM_HANDLE(nvk_cmd_buffer, cmd, commandBuffer);
 
    nvk_cmd_flush_wait_dep(cmd, pDependencyInfo, true);
+   nvk_cmd_image_layout_transition(cmd, pDependencyInfo);
    nvk_cmd_invalidate_deps(cmd, 1, pDependencyInfo);
 }
 
@@ -818,7 +861,7 @@ nvk_bind_descriptor_sets(struct nvk_cmd_buffer *cmd,
    struct nvk_device *dev = nvk_cmd_buffer_device(cmd);
    const struct nvk_physical_device *pdev = nvk_device_physical(dev);
 
-   union nvk_buffer_descriptor dynamic_buffers[NVK_MAX_DYNAMIC_BUFFERS];
+   uint32_t dynamic_buffers[4][NVK_MAX_DYNAMIC_BUFFERS];
    uint8_t set_dynamic_buffer_start[NVK_MAX_SETS];
 
    /* Read off the current dynamic buffer start array so we can use it to
@@ -840,12 +883,10 @@ nvk_bind_descriptor_sets(struct nvk_cmd_buffer *cmd,
     *
     * This means that, if some earlier set gets bound in such a way that
     * it changes set_dynamic_buffer_start[s], this binding is implicitly
-    * invalidated.  Therefore, we can always look at the current value
-    * of set_dynamic_buffer_start[s] as the base of our dynamic buffer
-    * range and it's only our responsibility to adjust all
-    * set_dynamic_buffer_start[p] for p > s as needed.
+    * invalidated.
     */
-   const uint8_t dyn_buffer_start = set_dynamic_buffer_start[info->firstSet];
+   const uint8_t dyn_buffer_start =
+      pipeline_layout->dynamic_descriptor_offset[info->firstSet];
    uint8_t dyn_buffer_end = dyn_buffer_start;
 
    uint32_t next_dyn_offset = 0;
@@ -874,8 +915,8 @@ nvk_bind_descriptor_sets(struct nvk_cmd_buffer *cmd,
          const struct nvk_descriptor_set_layout *set_layout =
             vk_to_nvk_descriptor_set_layout(pipeline_layout->set_layouts[s]);
 
-         if (set != NULL && set_layout->dynamic_buffer_count > 0) {
-            for (uint32_t j = 0; j < set_layout->dynamic_buffer_count; j++) {
+         if (set != NULL && set_layout->vk.dynamic_descriptor_count > 0) {
+            for (uint32_t j = 0; j < set_layout->vk.dynamic_descriptor_count; j++) {
                union nvk_buffer_descriptor db = set->dynamic_buffers[j];
                uint32_t offset = info->pDynamicOffsets[next_dyn_offset + j];
                if (BITSET_TEST(set_layout->dynamic_ubos, j) &&
@@ -889,12 +930,13 @@ nvk_bind_descriptor_sets(struct nvk_cmd_buffer *cmd,
                } else {
                   db.addr.base_addr += offset;
                }
-               dynamic_buffers[dyn_buffer_end + j] = db;
+               for (int k = 0; k < 4; k++)
+                  dynamic_buffers[k][dyn_buffer_end + j] = db.values[k];
             }
-            next_dyn_offset += set->layout->dynamic_buffer_count;
+            next_dyn_offset += set->layout->vk.dynamic_descriptor_count;
          }
 
-         dyn_buffer_end += set_layout->dynamic_buffer_count;
+         dyn_buffer_end += set_layout->vk.dynamic_descriptor_count;
       } else {
          assert(set == NULL);
       }
@@ -902,17 +944,10 @@ nvk_bind_descriptor_sets(struct nvk_cmd_buffer *cmd,
    assert(dyn_buffer_end <= NVK_MAX_DYNAMIC_BUFFERS);
    assert(next_dyn_offset <= info->dynamicOffsetCount);
 
-   nvk_descriptor_state_set_root_array(cmd, desc, dynamic_buffers,
-                                       dyn_buffer_start, dyn_buffer_end - dyn_buffer_start,
-                                       &dynamic_buffers[dyn_buffer_start]);
-
-   /* We need to set everything above first_set because later calls to
-    * nvk_bind_descriptor_sets() depend on it for knowing where to start and
-    * they may not be called on the next consecutive set.
-    */
-   for (uint32_t s = info->firstSet + info->descriptorSetCount;
-        s < NVK_MAX_SETS; s++)
-      set_dynamic_buffer_start[s] = dyn_buffer_end;
+   for (int i = 0; i < 4; i++)
+      nvk_descriptor_state_set_root_array(cmd, desc, dynamic_buffers[i],
+                                          dyn_buffer_start, dyn_buffer_end - dyn_buffer_start,
+                                          &dynamic_buffers[i][dyn_buffer_start]);
 
    /* We need to at least sync everything from first_set to NVK_MAX_SETS.
     * However, we only save anything if firstSet >= 4 so we may as well sync
@@ -1162,6 +1197,20 @@ nvk_cmd_buffer_flush_push_descriptors(struct nvk_cmd_buffer *cmd,
    }
 }
 
+void
+nvk_cmd_buffer_flush_printf_buffer(struct nvk_cmd_buffer *cmd,
+                                   struct nvk_descriptor_state *desc)
+{
+   struct nvk_device *dev = nvk_cmd_buffer_device(cmd);
+
+   if (!NAK_CAN_PRINTF)
+      return;
+
+   struct nvkmd_mem *bo = (struct nvkmd_mem *) dev->printf.bo;
+   nvk_descriptor_state_set_root(cmd, desc, printf_buffer_addr,
+                                 bo->va->addr);
+}
+
 bool
 nvk_cmd_buffer_get_cbuf_addr(struct nvk_cmd_buffer *cmd,
                              const struct nvk_descriptor_state *desc,
@@ -1198,7 +1247,8 @@ nvk_cmd_buffer_get_cbuf_addr(struct nvk_cmd_buffer *cmd,
          desc, set_dynamic_buffer_start[cbuf->desc_set], &dyn_idx);
       dyn_idx += cbuf->dynamic_idx;
       union nvk_buffer_descriptor ubo_desc;
-      nvk_descriptor_state_get_root(desc, dynamic_buffers[dyn_idx], &ubo_desc);
+      for (int i = 0; i < 4; i++)
+         nvk_descriptor_state_get_root(desc, dynamic_buffers[i][dyn_idx], &ubo_desc.values[i]);
       *addr_out = nvk_ubo_descriptor_addr(pdev, ubo_desc);
       return true;
    }
@@ -1274,26 +1324,4 @@ nvk_CmdPushDescriptorSetWithTemplate2KHR(
    nvk_cmd_dirty_cbufs_for_descriptors(cmd, NVK_VK_GRAPHICS_STAGE_BITS |
                                             VK_SHADER_STAGE_COMPUTE_BIT,
                                        set, set + 1);
-}
-
-VKAPI_ATTR void VKAPI_CALL
-nvk_CmdWriteBufferMarker2AMD(VkCommandBuffer commandBuffer,
-                             VkPipelineStageFlags2 stage,
-                             VkBuffer _buffer,
-                             VkDeviceSize offset,
-                             uint32_t marker)
-{
-   VK_FROM_HANDLE(nvk_cmd_buffer, cmd, commandBuffer);
-   VK_FROM_HANDLE(nvk_buffer, buffer, _buffer);
-   const uint64_t marker_addr = vk_buffer_address(&buffer->vk, offset);
-   struct nv_push *p = nvk_cmd_buffer_push(cmd, 5);
-
-   P_MTHD(p, NV9097, SET_REPORT_SEMAPHORE_A);
-   P_NV9097_SET_REPORT_SEMAPHORE_A(p, marker_addr >> 32);
-   P_NV9097_SET_REPORT_SEMAPHORE_B(p, marker_addr);
-   P_NV9097_SET_REPORT_SEMAPHORE_C(p, marker);
-   P_NV9097_SET_REPORT_SEMAPHORE_D(p, {
-      .pipeline_location = vk_stage_flags_to_nv9097_pipeline_location(stage),
-      .structure_size = STRUCTURE_SIZE_ONE_WORD,
-   });
 }

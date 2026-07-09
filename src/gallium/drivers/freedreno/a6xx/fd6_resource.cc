@@ -7,8 +7,6 @@
  *    Rob Clark <robclark@freedesktop.org>
  */
 
-#define FD_BO_NO_HARDPIN 1
-
 #include "drm-uapi/drm_fourcc.h"
 
 #include "a6xx/fd6_blitter.h"
@@ -234,9 +232,14 @@ static void
 setup_lrz(struct fd_resource *rsc)
 {
    struct fd_screen *screen = fd_screen(rsc->b.b.screen);
-   uint32_t nr_layers = 1;
+   uint32_t nr_layers = rsc->b.b.array_size;
+   assert(nr_layers);
+
    fdl6_lrz_layout_init<CHIP>(&rsc->lrz_layout, &rsc->layout, 0, 0,
                               screen->info, 0, nr_layers);
+
+   if (!rsc->lrz_layout.lrz_total_size)
+      return;
 
    rsc->lrz = fd_bo_new(screen->dev, rsc->lrz_layout.lrz_total_size,
                         FD_BO_NOMAP, "lrz");
@@ -259,7 +262,7 @@ fd6_layout_resource(struct fd_resource *rsc, enum fd_layout_type type)
    if (ubwc && !ok_ubwc_format(prsc->screen, prsc->format, prsc->nr_samples))
       ubwc = false;
 
-   struct fdl_image_params params = fd_image_params(prsc, ubwc, tile_mode);
+   struct fdl_image_params params = fd_image_params(prsc, ubwc, tile_mode, 0);
 
    fdl6_layout_image(&rsc->layout, screen->info, &params, NULL);
 
@@ -286,7 +289,8 @@ layout_resource_for_handle(struct fd_resource *rsc, struct winsys_handle *handle
       return false;
    }
 
-   struct fdl_image_params params = fd_image_params(prsc, ubwc, tile_mode);
+   struct fdl_image_params params = fd_image_params(prsc, ubwc,
+					tile_mode, handle->plane);
 
    if (!fdl6_layout_image(&rsc->layout, screen->info, &params, &l)) {
       if (FD_DBG(LAYOUT))
@@ -339,6 +343,8 @@ fd6_is_format_supported(struct pipe_screen *pscreen,
                         enum pipe_format fmt,
                         uint64_t modifier)
 {
+   struct fd_screen *screen = fd_screen(pscreen);
+
    switch (modifier) {
    case DRM_FORMAT_MOD_LINEAR:
       return true;
@@ -348,7 +354,7 @@ fd6_is_format_supported(struct pipe_screen *pscreen,
        */
       return ok_ubwc_format(pscreen, fmt, 0);
    case DRM_FORMAT_MOD_QCOM_TILED3:
-      return fd6_tile_mode_for_format(fmt) == TILE6_3;
+      return fd6_tile_mode_for_format(screen->info, fmt) == TILE6_3;
    default:
       return false;
    }

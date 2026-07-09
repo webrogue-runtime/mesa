@@ -54,7 +54,7 @@
 #include "util/blob.h"
 #include "util/hash_table.h"
 #include "util/macros.h"
-#include "util/mesa-sha1.h"
+#include "util/mesa-blake3.h"
 #include "util/simple_mtx.h"
 #include "util/u_debug.h"
 #include "vulkan/vulkan_core.h"
@@ -153,6 +153,7 @@ hk_preprocess_nir_internal(struct vk_physical_device *vk_pdev, nir_shader *nir)
    if (nir->info.stage == MESA_SHADER_FRAGMENT) {
       struct nir_lower_sysvals_to_varyings_options sysvals_opts = {
          .point_coord = true,
+         .primitive_id = nir->info.stage == MESA_SHADER_FRAGMENT,
       };
 
       nir_lower_sysvals_to_varyings(nir, &sysvals_opts);
@@ -280,8 +281,11 @@ hk_hash_graphics_state(struct vk_physical_device *device,
       struct hk_fs_key key;
       hk_populate_fs_key(&key, state);
       _mesa_blake3_update(&blake3_ctx, &key, sizeof(key));
+   }
 
-      const bool is_multiview = state->rp->view_mask != 0;
+   if (state &&
+       (stages & (VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT))) {
+      const bool is_multiview = state->mv->view_mask != 0;
       _mesa_blake3_update(&blake3_ctx, &is_multiview, sizeof(is_multiview));
    }
 
@@ -628,6 +632,7 @@ lower(nir_builder *b, nir_tex_instr *tex, UNUSED void *_data)
           * Linear filtering is linear (duh), so lerping is compatible.
           */
          replaced = nir_flrp(b, clamp_to_0, clamp_to_1, border);
+         b->shader->info.flrp_lowered = false;
       } else {
          /* For integers, just select componentwise since there is no linear
           * filtering. Gathers also use this path since they are unfiltered in
@@ -794,8 +799,6 @@ hk_lower_nir(struct hk_device *dev, nir_shader *nir,
    if (nir->info.stage == MESA_SHADER_FRAGMENT) {
       NIR_PASS(_, nir, nir_lower_input_attachments,
                &(nir_input_attachment_options){
-                  .use_fragcoord_sysval = true,
-                  .use_layer_id_sysval = true,
                   .use_view_id_for_layer = is_multiview,
                });
 
@@ -1046,7 +1049,7 @@ hk_lower_hw_vs(nir_shader *nir, struct hk_shader *shader, bool kill_psiz)
     *
     * Must be synced with pointSizeRange.
     */
-   NIR_PASS(_, nir, nir_lower_point_size, 1.0f, 511.95f, nir_type_invalid);
+   NIR_PASS(_, nir, nir_lower_point_size, 1.0f, 511.95f);
 
    if (kill_psiz) {
       NIR_PASS(_, nir, nir_shader_intrinsics_pass, kill_psiz_write,
@@ -1405,9 +1408,8 @@ hk_compile_shader(struct hk_device *dev, struct vk_shader_compile_info *info,
          NIR_PASS(_, nir, nir_recompute_io_bases, nir_var_shader_in);
       }
 
-      /* the shader_out portion of this is load-bearing even for tess eval */
-      NIR_PASS(_, nir, nir_io_add_const_offset_to_base,
-               nir_var_shader_in | nir_var_shader_out);
+      /* Fold constant offset srcs for IO. */
+      NIR_PASS(_, nir, nir_opt_constant_folding);
 
       for (enum hk_vs_variant v = 0; v < HK_VS_VARIANTS; ++v) {
          /* Only compile the software variant if we might use this shader with
@@ -1497,7 +1499,7 @@ hk_compile_shader(struct hk_device *dev, struct vk_shader_compile_info *info,
 }
 
 static void
-nir_opts(nir_shader *nir)
+nir_opts(nir_shader *nir, void *data)
 {
    bool progress;
 
@@ -1523,8 +1525,6 @@ nir_opts(nir_shader *nir)
       NIR_PASS(progress, nir, nir_opt_phi_precision);
       NIR_PASS(progress, nir, nir_opt_algebraic);
       NIR_PASS(progress, nir, nir_opt_constant_folding);
-      NIR_PASS(progress, nir, nir_io_add_const_offset_to_base,
-               nir_var_shader_in | nir_var_shader_out);
 
       NIR_PASS(progress, nir, nir_opt_undef);
       NIR_PASS(progress, nir, nir_opt_loop_unroll);
@@ -1548,7 +1548,7 @@ hk_compile_shaders(struct vk_device *vk_dev, uint32_t shader_count,
    for (uint32_t i = 0; i < shader_count; i++) {
       const struct vk_shader_compile_info *info = &infos[i];
       /* TODO: Multiview with ESO */
-      const bool is_multiview = state && state->rp->view_mask != 0;
+      const bool is_multiview = state && state->mv->view_mask != 0;
       enum hk_feature_key hk_features = hk_make_feature_key(features);
       nir_shader *nir = info->nir;
 
@@ -1556,8 +1556,8 @@ hk_compile_shaders(struct vk_device *vk_dev, uint32_t shader_count,
                    info->set_layout_count, info->set_layouts, hk_features);
 
       if (nir->xfb_info) {
-         nir_io_add_const_offset_to_base(
-            nir, nir_var_shader_in | nir_var_shader_out);
+         /* Fold constant offset srcs for IO. */
+         NIR_PASS(_, nir, nir_opt_constant_folding);
 
          nir_io_add_intrinsic_xfb_info(nir);
       }
@@ -1566,7 +1566,7 @@ hk_compile_shaders(struct vk_device *vk_dev, uint32_t shader_count,
    }
 
    nir_opt_varyings_bulk(shaders, shader_count, true, UINT32_MAX, UINT32_MAX,
-                         nir_opts);
+                         nir_opts, NULL);
 
    for (uint32_t i = 0; i < shader_count; i++) {
       VkResult result =

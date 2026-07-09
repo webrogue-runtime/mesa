@@ -110,6 +110,7 @@ add_bvh_dump(struct anv_cmd_buffer *cmd_buffer,
              enum bvh_dump_type dump_type)
 {
    assert(dump_size % 4 == 0);
+   assert(cmd_buffer->vk.level == VK_COMMAND_BUFFER_LEVEL_PRIMARY);
 
    struct anv_device *device = cmd_buffer->device;
    struct anv_bo *bo = NULL;
@@ -135,11 +136,15 @@ add_bvh_dump(struct anv_cmd_buffer *cmd_buffer,
 
    struct anv_address dst_addr = { .bo = bvh_dump->bo, .offset = 0 };
    struct anv_address src_addr = anv_address_from_u64(src);
+
+   vk_barrier_compute_w_to_compute_r(vk_command_buffer_to_handle(&cmd_buffer->vk));
    anv_cmd_copy_addr(cmd_buffer, src_addr, dst_addr, bvh_dump->dump_size);
 
-   pthread_mutex_lock(&device->mutex);
-   list_addtail(&bvh_dump->link, &device->bvh_dumps);
-   pthread_mutex_unlock(&device->mutex);
+   /* Add host barrier to read BVH data. */
+   vk_barrier_compute_w_to_host_r(vk_command_buffer_to_handle(&cmd_buffer->vk));
+   genX(cmd_buffer_apply_pipe_flushes)(cmd_buffer);
+
+   list_addtail(&bvh_dump->link, &cmd_buffer->bvh_dumps);
 }
 
 static void
@@ -241,16 +246,11 @@ get_bvh_layout(VkGeometryTypeKHR geometry_type, uint32_t leaf_count,
 
    uint64_t offset = ANV_RT_BVH_HEADER_SIZE;
 
-   /* For a TLAS, we store the address of anv_instance_leaf after header
-    * This is for quick access in the copy.comp
+   /* This is where internal_nodes/leaves start to be encoded.
+    *
+    * NOTE: Root node offset is fixed to 256 so make sure you don't add
+    * anything above this offset.
     */
-   if (geometry_type == VK_GEOMETRY_TYPE_INSTANCES_KHR) {
-      offset += leaf_count * sizeof(uint64_t);
-   }
-   /* The BVH and hence bvh_offset needs 64 byte alignment for RT nodes. */
-   offset = align64(offset, 64);
-
-   /* This is where internal_nodes/leaves start to be encoded */
    layout->bvh_offset = offset;
 
    offset += internal_count * ANV_RT_INTERNAL_NODE_SIZE;
@@ -270,7 +270,17 @@ get_bvh_layout(VkGeometryTypeKHR geometry_type, uint32_t leaf_count,
       UNREACHABLE("Unknown VkGeometryTypeKHR");
    }
 
-   layout->size = offset;
+   offset = align64(offset, 64);
+   layout->instance_leaves_offset = offset;
+
+   /* For a TLAS, we store the address of anv_instance_leaf after header
+    * This is for quick access in the copy.comp
+    */
+   if (geometry_type == VK_GEOMETRY_TYPE_INSTANCES_KHR) {
+      offset += leaf_count * sizeof(uint64_t);
+   }
+
+   layout->size = align64(offset, 64);
 }
 
 static VkDeviceSize
@@ -284,7 +294,20 @@ anv_get_as_size(VkDevice device, const struct vk_acceleration_structure_build_st
 static void
 anv_get_build_config(VkDevice device, struct vk_acceleration_structure_build_state *state)
 {
-   state->config.encode_key[1] = (state->build_info->flags & VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR) ? 1 : 0;
+   VkBuildAccelerationStructureFlagsKHR flags = state->build_info->flags;
+
+   /* TODO: ANV does not yet have support for AS updates without doing a full
+    * rebuild, this means that AS updates can cause their size to increase.
+    *
+    * The Vulkan spec says that the maximum size required for updating a
+    * compacted AS will be the "compacted size" that can be queried from it
+    * after the initial build, so in order for apps to behave we must report
+    * the compacted size of an updatable AS as the maximum possible size for
+    * any AS that could also be built from the same number of leaf nodes.
+    */
+   state->config.encode_key[1] =
+      ((flags & VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR) &&
+      !(flags & VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR)) ? 1 : 0;
 }
 
 static void
@@ -322,8 +345,8 @@ anv_bvh_build_set_args(VkCommandBuffer commandBuffer, const void *args,
    vk_get_bvh_build_pipeline_layout(&device->vk, &device->meta_device, size,
                                     &layout);
 
-   VkPushConstantsInfoKHR push_info = {
-      .sType = VK_STRUCTURE_TYPE_PUSH_CONSTANTS_INFO_KHR,
+   VkPushConstantsInfo push_info = {
+      .sType = VK_STRUCTURE_TYPE_PUSH_CONSTANTS_INFO,
       .layout = layout,
       .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
       .offset = 0,
@@ -331,11 +354,11 @@ anv_bvh_build_set_args(VkCommandBuffer commandBuffer, const void *args,
       .pValues = args,
    };
 
-   anv_CmdPushConstants2KHR(commandBuffer, &push_info);
+   anv_CmdPushConstants2(commandBuffer, &push_info);
 }
 
 static VkResult
-anv_encode_bind_pipeline(VkCommandBuffer commandBuffer, const struct vk_acceleration_structure_build_state *state)
+anv_encode_prepare(VkCommandBuffer commandBuffer, const struct vk_acceleration_structure_build_state *state)
 {
    anv_bvh_build_bind_pipeline(commandBuffer,
                                ANV_OBJECT_KEY_BVH_ENCODE,
@@ -344,28 +367,47 @@ anv_encode_bind_pipeline(VkCommandBuffer commandBuffer, const struct vk_accelera
    return VK_SUCCESS;
 }
 
+/* Helper to zero out the output BVH. */
+static void
+anv_clear_out_bvh(struct anv_cmd_buffer *cmd_buffer,
+                  VkDeviceAddress output_bvh_addr, uint64_t bvh_size)
+{
+   assert(bvh_size % 4 == 0);
+   struct anv_address anv_bvh_addr = anv_address_from_u64(output_bvh_addr);
+
+   anv_cmd_buffer_fill_area(cmd_buffer, anv_bvh_addr, bvh_size, 0 /* data */);
+
+   vk_barrier_compute_w_to_compute_r(vk_command_buffer_to_handle(&cmd_buffer->vk));
+   genX(cmd_buffer_apply_pipe_flushes)(cmd_buffer);
+}
+
+
 static void
 anv_encode_as(VkCommandBuffer commandBuffer, const struct vk_acceleration_structure_build_state *state)
 {
-   if (INTEL_DEBUG(DEBUG_BVH_NO_BUILD))
-      return;
-
    VK_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
    VK_FROM_HANDLE(vk_acceleration_structure, dst, state->build_info->dstAccelerationStructure);
 
+   struct bvh_layout bvh_layout;
+   VkGeometryTypeKHR geometry_type = vk_get_as_geometry_type(state->build_info);
+   get_bvh_layout(geometry_type, state->leaf_node_count, &bvh_layout);
+
+   if (INTEL_DEBUG(DEBUG_BVH_NO_BUILD)) {
+      /* Zero out the whole BVH when we run with BVH_NO_BUILD debug option. */
+      anv_clear_out_bvh(cmd_buffer,
+                        vk_acceleration_structure_get_va(dst) + bvh_layout.bvh_offset,
+                        bvh_layout.size);
+      return;
+   }
+
    uint64_t intermediate_header_addr = state->build_info->scratchData.deviceAddress + state->scratch.header_offset;
    uint64_t intermediate_bvh_addr = state->build_info->scratchData.deviceAddress + state->scratch.ir_offset;
-
-   VkGeometryTypeKHR geometry_type = vk_get_as_geometry_type(state->build_info);
 
    STATIC_ASSERT(sizeof(struct anv_accel_struct_header) == ANV_RT_BVH_HEADER_SIZE);
    STATIC_ASSERT(sizeof(struct anv_instance_leaf) == ANV_RT_INSTANCE_LEAF_SIZE);
    STATIC_ASSERT(sizeof(struct anv_quad_leaf_node) == ANV_RT_QUAD_LEAF_SIZE);
    STATIC_ASSERT(sizeof(struct anv_procedural_leaf_node) == ANV_RT_PROCEDURAL_LEAF_SIZE);
    STATIC_ASSERT(sizeof(struct anv_internal_node) == ANV_RT_INTERNAL_NODE_SIZE);
-
-   struct bvh_layout bvh_layout;
-   get_bvh_layout(geometry_type, state->leaf_node_count, &bvh_layout);
 
    const struct encode_args args = {
       .intermediate_bvh = intermediate_bvh_addr,
@@ -375,6 +417,8 @@ anv_encode_as(VkCommandBuffer commandBuffer, const struct vk_acceleration_struct
       .output_bvh_offset = bvh_layout.bvh_offset,
       .leaf_node_count = state->leaf_node_count,
       .geometry_type = geometry_type,
+      .instance_leaves_addr = vk_acceleration_structure_get_va(dst) +
+                              bvh_layout.instance_leaves_offset,
    };
    anv_bvh_build_set_args(commandBuffer, &args, sizeof(args));
 
@@ -385,12 +429,15 @@ anv_encode_as(VkCommandBuffer commandBuffer, const struct vk_acceleration_struct
 static VkResult
 anv_init_header_bind_pipeline(VkCommandBuffer commandBuffer, const struct vk_acceleration_structure_build_state *state)
 {
-   if (state->config.encode_key[1] == 1) {
-      anv_bvh_build_bind_pipeline(commandBuffer,
-                                  ANV_OBJECT_KEY_BVH_HEADER,
-                                  header_spv, sizeof(header_spv),
-                                  sizeof(struct header_args), 0);
-   }
+   /* Add a barrier to ensure the writes from encode.comp is ready to be
+    * read by header.comp
+    */
+   vk_barrier_compute_w_to_compute_r(commandBuffer);
+
+   anv_bvh_build_bind_pipeline(commandBuffer,
+                               ANV_OBJECT_KEY_BVH_HEADER,
+                               header_spv, sizeof(header_spv),
+                               sizeof(struct header_args), 0);
 
    return VK_SUCCESS;
 }
@@ -414,80 +461,20 @@ anv_init_header(VkCommandBuffer commandBuffer, const struct vk_acceleration_stru
    uint32_t instance_count = geometry_type == VK_GEOMETRY_TYPE_INSTANCES_KHR ?
                              state->leaf_node_count : 0;
 
-   if (state->config.encode_key[1] == 1) {
-      /* Add a barrier to ensure the writes from encode.comp is ready to be
-       * read by header.comp
-       */
-      vk_barrier_compute_w_to_compute_r(commandBuffer);
+   struct header_args args = {
+      .src = intermediate_header_addr,
+      .dst = vk_acceleration_structure_get_va(dst),
+      .bvh_offset = bvh_layout.bvh_offset,
+      .instance_count = instance_count,
+      .instance_leaves_offset = bvh_layout.instance_leaves_offset,
+      .is_compacted = (state->config.encode_key[1] == 1),
+      .bvh_size = bvh_layout.size,
+   };
 
-      struct header_args args = {
-         .src = intermediate_header_addr,
-         .dst = vk_acceleration_structure_get_va(dst),
-         .bvh_offset = bvh_layout.bvh_offset,
-         .instance_count = instance_count,
-      };
-
-      anv_bvh_build_set_args(commandBuffer, &args, sizeof(args));
-      vk_common_CmdDispatch(commandBuffer, 1, 1, 1);
-   } else {
-      vk_barrier_compute_w_to_host_r(commandBuffer);
-
-      /* L1/L2 caches flushes should have been dealt with by pipeline barriers.
-       * Unfortunately some platforms require L3 flush because CS (reading the
-       * dispatch size paramters) is not L3 coherent.
-       */
-      if (!ANV_DEVINFO_HAS_COHERENT_L3_CS(cmd_buffer->device->info)) {
-         anv_add_pending_pipe_bits(cmd_buffer, ANV_PIPE_DATA_CACHE_FLUSH_BIT,
-                                   "copy dispatch size for dispatch");
-         genX(cmd_buffer_apply_pipe_flushes)(cmd_buffer);
-      }
-
-      size_t base = offsetof(struct anv_accel_struct_header,
-                             copy_dispatch_size);
-
-      struct anv_accel_struct_header header = {};
-
-      header.instance_count = instance_count;
-      header.self_ptr = header_addr;
-      header.compacted_size = bvh_layout.size;
-
-      /* 128 is local_size_x in copy.comp shader, 8 is the amount of data
-       * copied by each iteration of that shader's loop
-       */
-      header.copy_dispatch_size[0] = DIV_ROUND_UP(header.compacted_size,
-                                                  8 * 128);
-      header.copy_dispatch_size[1] = 1;
-      header.copy_dispatch_size[2] = 1;
-
-      header.serialization_size =
-         header.compacted_size +
-         sizeof(struct vk_accel_struct_serialization_header) +
-         sizeof(uint64_t) * header.instance_count;
-
-      header.size = header.compacted_size;
-
-#if GFX_VERx10 >= 300
-      header.enable_64b_rt = 1;
-#else
-      header.enable_64b_rt = 0;
-#endif
-
-      size_t header_size = sizeof(struct anv_accel_struct_header) - base;
-      assert(base % sizeof(uint32_t) == 0);
-      assert(header_size % sizeof(uint32_t) == 0);
-      uint32_t *header_ptr = (uint32_t *)((char *)&header + base);
-
-      struct anv_address addr = anv_address_from_u64(header_addr + base);
-      anv_cmd_buffer_update_addr(cmd_buffer, addr, header_size, header_ptr);
-   }
+   anv_bvh_build_set_args(commandBuffer, &args, sizeof(args));
+   vk_common_CmdDispatch(commandBuffer, 1, 1, 1);
 
    if (INTEL_DEBUG_BVH_ANY) {
-      genx_batch_emit_pipe_control(&cmd_buffer->batch, cmd_buffer->device->info,
-                                   cmd_buffer->state.current_pipeline,
-                                   ANV_PIPE_END_OF_PIPE_SYNC_BIT |
-                                   ANV_PIPE_DATA_CACHE_FLUSH_BIT |
-                                   ANV_PIPE_HDC_PIPELINE_FLUSH_BIT |
-                                   ANV_PIPE_UNTYPED_DATAPORT_CACHE_FLUSH_BIT);
       debug_record_as_to_bvh_dump(cmd_buffer, header_addr, bvh_layout.size,
                                   intermediate_header_addr, intermediate_bvh_addr,
                                   state->leaf_node_count, geometry_type);
@@ -499,8 +486,7 @@ static const struct vk_acceleration_structure_build_ops anv_build_ops = {
    .end_debug_marker = end_debug_marker,
    .get_as_size = anv_get_as_size,
    .get_build_config = anv_get_build_config,
-   .encode_bind_pipeline = { anv_encode_bind_pipeline,
-                             anv_init_header_bind_pipeline },
+   .encode_prepare = { anv_encode_prepare, anv_init_header_bind_pipeline },
    .encode_as = { anv_encode_as, anv_init_header },
 };
 
@@ -670,7 +656,10 @@ genX(CmdCopyAccelerationStructureKHR)(
     * dispatch paramters) is not L3 coherent.
     */
    if (!ANV_DEVINFO_HAS_COHERENT_L3_CS(cmd_buffer->device->info)) {
-      anv_add_pending_pipe_bits(cmd_buffer, ANV_PIPE_DATA_CACHE_FLUSH_BIT,
+      anv_add_pending_pipe_bits(cmd_buffer,
+                                VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
+                                ANV_PIPE_DATA_CACHE_FLUSH_BIT,
                                 "bvh size read for dispatch");
    }
 
@@ -720,6 +709,8 @@ genX(CmdCopyAccelerationStructureToMemoryKHR)(
     */
    if (!ANV_DEVINFO_HAS_COHERENT_L3_CS(cmd_buffer->device->info)) {
       anv_add_pending_pipe_bits(cmd_buffer,
+                                VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
                                 ANV_PIPE_DATA_CACHE_FLUSH_BIT,
                                 "bvh size read for dispatch");
    }

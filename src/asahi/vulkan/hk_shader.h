@@ -342,8 +342,8 @@ hk_buffer_addr_format(VkPipelineRobustnessBufferBehaviorEXT robustness)
    }
 }
 
-bool
-hk_lower_uvs_index(nir_shader *s, mesa_shader_stage sw_stage, unsigned nr_vbos);
+bool hk_lower_uvs_index(nir_shader *s, mesa_shader_stage sw_stage,
+                        unsigned nr_vbos);
 
 bool
 hk_nir_lower_descriptors(nir_shader *nir,
@@ -387,8 +387,16 @@ struct hk_passthrough_gs_key {
    /* Decomposed primitive */
    enum mesa_prim prim;
 
-   /* Transform feedback info. Must add nir_xfb_info_size to get the key size */
+   /* Transform feedback info. Must use hk_passthrough_gs_key_size to get the
+    * key size */
    nir_xfb_info xfb_info;
 };
+
+static inline size_t
+hk_passthrough_gs_key_size(uint16_t output_count)
+{
+   return (sizeof(struct hk_passthrough_gs_key) - sizeof(nir_xfb_info)) +
+      nir_xfb_info_size(output_count);
+}
 
 void hk_nir_passthrough_gs(struct nir_builder *b, const void *key_);

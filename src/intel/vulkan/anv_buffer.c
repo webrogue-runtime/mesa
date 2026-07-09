@@ -14,8 +14,8 @@ anv_bind_buffer_memory(struct anv_device *device,
    assert(pBindInfo->sType == VK_STRUCTURE_TYPE_BIND_BUFFER_MEMORY_INFO);
    assert(!anv_buffer_is_sparse(buffer));
 
-   const VkBindMemoryStatusKHR *bind_status =
-      vk_find_struct_const(pBindInfo->pNext, BIND_MEMORY_STATUS_KHR);
+   const VkBindMemoryStatus *bind_status =
+      vk_find_struct_const(pBindInfo->pNext, BIND_MEMORY_STATUS);
 
    if (mem) {
       assert(pBindInfo->memoryOffset < mem->vk.size);
@@ -32,6 +32,11 @@ anv_bind_buffer_memory(struct anv_device *device,
    buffer->vk.device_address = anv_address_physical(buffer->address);
 
    ANV_RMV(buffer_bind, device, buffer);
+
+   ANV_ADDR_BINDING_REPORT_ADDR_BIND(device,
+                                     &buffer->vk.base,
+                                     buffer->vk.device_address,
+                                     buffer->vk.size);
 
    if (bind_status)
       *bind_status->pResult = VK_SUCCESS;
@@ -56,7 +61,7 @@ static void
 anv_get_buffer_memory_requirements(struct anv_device *device,
                                    VkBufferCreateFlags flags,
                                    VkDeviceSize size,
-                                   VkBufferUsageFlags2KHR usage,
+                                   VkBufferUsageFlags2 usage,
                                    bool is_sparse,
                                    VkMemoryRequirements2* pMemoryRequirements)
 {
@@ -130,12 +135,12 @@ anv_get_buffer_memory_requirements(struct anv_device *device,
    }
 }
 
-static VkBufferUsageFlags2KHR
+static VkBufferUsageFlags2
 get_buffer_usages(const VkBufferCreateInfo *create_info)
 {
-   const VkBufferUsageFlags2CreateInfoKHR *usage2_info =
+   const VkBufferUsageFlags2CreateInfo *usage2_info =
       vk_find_struct_const(create_info->pNext,
-                           BUFFER_USAGE_FLAGS_2_CREATE_INFO_KHR);
+                           BUFFER_USAGE_FLAGS_2_CREATE_INFO);
    return usage2_info != NULL ? usage2_info->usage : create_info->usage;
 }
 
@@ -147,7 +152,7 @@ void anv_GetDeviceBufferMemoryRequirements(
    ANV_FROM_HANDLE(anv_device, device, _device);
    const bool is_sparse =
       pInfo->pCreateInfo->flags & VK_BUFFER_CREATE_SPARSE_BINDING_BIT;
-   VkBufferUsageFlags2KHR usages = get_buffer_usages(pInfo->pCreateInfo);
+   VkBufferUsageFlags2 usages = get_buffer_usages(pInfo->pCreateInfo);
 
    if ((device->physical->sparse_type == ANV_SPARSE_TYPE_NOT_SUPPORTED) &&
        INTEL_DEBUG(DEBUG_SPARSE) &&
@@ -184,7 +189,7 @@ VkResult anv_CreateBuffer(
 
    if ((pCreateInfo->flags & VK_BUFFER_CREATE_SPARSE_BINDING_BIT) &&
        device->physical->sparse_type == ANV_SPARSE_TYPE_TRTT) {
-      VkBufferUsageFlags2KHR usages = get_buffer_usages(pCreateInfo);
+      VkBufferUsageFlags2 usages = get_buffer_usages(pCreateInfo);
       if (usages & (VK_BUFFER_USAGE_2_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT |
                     VK_BUFFER_USAGE_2_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT)) {
          return vk_errorf(device, VK_ERROR_UNKNOWN,
@@ -247,6 +252,10 @@ VkResult anv_CreateBuffer(
       }
 
       buffer->vk.device_address = anv_address_physical(buffer->address);
+
+      ANV_ADDR_BINDING_REPORT_ADDR_BIND(device, &buffer->vk.base,
+                                        buffer->vk.device_address,
+                                        buffer->sparse_data.size);
    }
 
    ANV_RMV(buffer_create, device, false, buffer);
@@ -272,6 +281,13 @@ void anv_DestroyBuffer(
    if (anv_buffer_is_sparse(buffer)) {
       assert(buffer->address.offset == buffer->sparse_data.address);
       anv_free_sparse_bindings(device, &buffer->sparse_data);
+      ANV_ADDR_BINDING_REPORT_ADDR_UNBIND(device, &buffer->vk.base,
+                                          buffer->vk.device_address,
+                                          buffer->sparse_data.size);
+   } else {
+      ANV_ADDR_BINDING_REPORT_ADDR_UNBIND(device, &buffer->vk.base,
+                                          buffer->vk.device_address,
+                                          buffer->vk.size);
    }
 
    vk_buffer_destroy(&device->vk, pAllocator, &buffer->vk);
@@ -327,7 +343,7 @@ anv_fill_buffer_surface_state(struct anv_device *device,
                               struct isl_swizzle swizzle,
                               isl_surf_usage_flags_t usage,
                               struct anv_address address,
-                              uint32_t range, uint32_t stride)
+                              uint64_t range, uint32_t stride)
 {
    if (address.bo && address.bo->alloc_flags & ANV_BO_ALLOC_PROTECTED)
       usage |= ISL_SURF_USAGE_PROTECTED_BIT;

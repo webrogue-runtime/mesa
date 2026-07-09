@@ -2,26 +2,7 @@
  * Copyright (C) 2019-2020 Collabora, Ltd.
  * Copyright (C) 2019 Alyssa Rosenzweig
  * Copyright (C) 2014-2017 Broadcom
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- *
+ * SPDX-License-Identifier: MIT
  */
 
 #include <assert.h>
@@ -32,9 +13,9 @@
 #include "util/rounding.h"
 #include "util/u_framebuffer.h"
 #include "util/u_pack_color.h"
-#include "util/perf/cpu_trace.h"
 #include "pan_bo.h"
 #include "pan_context.h"
+#include "pan_trace.h"
 #include "pan_util.h"
 
 #define foreach_batch(ctx, idx)                                                \
@@ -281,15 +262,15 @@ panfrost_batch_update_access(struct panfrost_batch *batch,
    if (writes) {
       unsigned i;
       foreach_batch(ctx, i) {
-         struct panfrost_batch *batch = &ctx->batches.slots[i];
-
          /* Skip the entry if this our batch. */
          if (i == batch_idx)
             continue;
 
+         struct panfrost_batch *other_batch = &ctx->batches.slots[i];
+
          /* Submit if it's a user */
-         if (panfrost_batch_uses_resource(batch, rsrc))
-            panfrost_batch_submit(ctx, batch);
+         if (panfrost_batch_uses_resource(other_batch, rsrc))
+            panfrost_batch_submit(ctx, other_batch);
       }
    }
 }
@@ -696,7 +677,7 @@ static void
 panfrost_batch_submit(struct panfrost_context *ctx,
                       struct panfrost_batch *batch)
 {
-   MESA_TRACE_FUNC();
+   PAN_TRACE_FUNC(PAN_TRACE_GL_JOB);
 
    struct pipe_screen *pscreen = ctx->base.screen;
    struct panfrost_screen *screen = pan_screen(pscreen);
@@ -767,7 +748,7 @@ void
 panfrost_flush_all_batches(struct panfrost_context *ctx, const char *reason)
 {
    assert(reason);
-   MESA_TRACE_SCOPE("%s reason=\"%s\"", __func__, reason);
+   PAN_TRACE_SCOPE(PAN_TRACE_GL_JOB, "%s reason=\"%s\"", __func__, reason);
    perf_debug(ctx, "Flushing everything due to: %s", reason);
 
    struct panfrost_batch *batch = panfrost_get_batch_for_fbo(ctx);
@@ -787,7 +768,7 @@ panfrost_flush_writer(struct panfrost_context *ctx,
                       struct panfrost_resource *rsrc, const char *reason)
 {
    assert(reason);
-   MESA_TRACE_SCOPE("%s reason=\"%s\"", __func__, reason);
+   PAN_TRACE_SCOPE(PAN_TRACE_GL_JOB, "%s reason=\"%s\"", __func__, reason);
 
    struct hash_entry *entry = _mesa_hash_table_search(ctx->writers, rsrc);
 
@@ -803,7 +784,7 @@ panfrost_flush_batches_accessing_rsrc(struct panfrost_context *ctx,
                                       const char *reason)
 {
    assert(reason);
-   MESA_TRACE_SCOPE("%s reason=\"%s\"", __func__, reason);
+   PAN_TRACE_SCOPE(PAN_TRACE_GL_JOB, "%s reason=\"%s\"", __func__, reason);
 
    unsigned i;
    foreach_batch(ctx, i) {

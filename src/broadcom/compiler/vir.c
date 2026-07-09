@@ -25,6 +25,7 @@
 #include "v3d_compiler.h"
 #include "compiler/nir/nir_schedule.h"
 #include "compiler/nir/nir_builder.h"
+#include "compiler/nir/nir_builtin_builder.h"
 #include "compiler/nir/nir_format_convert.h"
 #include "util/perf/cpu_trace.h"
 
@@ -64,6 +65,10 @@ vir_has_side_effects(struct v3d_compile *c, struct qinst *inst)
                 case V3D_QPU_A_STVPMP:
                 case V3D_QPU_A_VPMWT:
                 case V3D_QPU_A_TMUWT:
+                case V3D_QPU_A_SETNNMODE_UU:
+                case V3D_QPU_A_SETNNMODE_SU:
+                case V3D_QPU_A_SETNNMODE_US:
+                case V3D_QPU_A_SETNNMODE_SS:
                         return true;
                 default:
                         break;
@@ -1035,11 +1040,12 @@ v3d_nir_lower_vs_early(struct v3d_compile *c)
 
         /* This must go before nir_lower_io */
         if (c->vs_key->per_vertex_point_size)
-                NIR_PASS(_, c->s, nir_lower_point_size, 1.0f, 0.0f, nir_type_invalid);
+                NIR_PASS(_, c->s, nir_lower_point_size, 1.0f, 0.0f);
 
         NIR_PASS(_, c->s, nir_lower_io, nir_var_shader_in | nir_var_shader_out,
                  type_size_vec4,
                  (nir_lower_io_options)0);
+        c->s->info.disable_output_offset_src_constant_folding = true;
 
         /* For geometry stages using the same segment for inputs and outputs
          * we need to read all inputs before writing any output. If we switch
@@ -1077,11 +1083,13 @@ v3d_nir_lower_gs_early(struct v3d_compile *c)
 
         /* This must go before nir_lower_io */
         if (c->gs_key->per_vertex_point_size)
-                NIR_PASS(_, c->s, nir_lower_point_size, 1.0f, 0.0f, nir_type_invalid);
+                NIR_PASS(_, c->s, nir_lower_point_size, 1.0f, 0.0f);
 
         NIR_PASS(_, c->s, nir_lower_io, nir_var_shader_in | nir_var_shader_out,
                  type_size_vec4,
                  (nir_lower_io_options)0);
+        c->s->info.disable_output_offset_src_constant_folding = true;
+
         /* clean up nir_lower_io's deref_var remains and do a constant folding pass
          * on the code it generated.
          */
@@ -1214,7 +1222,7 @@ v3d_nir_lower_fs_early(struct v3d_compile *c)
                         assert(c->fs_key->msaa);
 
                         NIR_PASS(_, c->s, nir_lower_alpha_to_coverage,
-                                 V3D_MAX_SAMPLES, true, NULL);
+                                 true, NULL);
                 }
 
                 if (c->fs_key->sample_alpha_to_one)
@@ -1344,13 +1352,48 @@ v3d_instr_delay_cb(nir_instr *instr, void *data)
    switch (instr->type) {
    case nir_instr_type_undef:
    case nir_instr_type_load_const:
-   case nir_instr_type_alu:
    case nir_instr_type_deref:
    case nir_instr_type_jump:
    case nir_instr_type_call:
    case nir_instr_type_cmat_call:
    case nir_instr_type_phi:
       return 1;
+
+   case nir_instr_type_alu: {
+      nir_alu_instr *alu = nir_instr_as_alu(instr);
+      switch (alu->op) {
+      /* We implement integer downcasts with a MOV, which can be copy
+       * propagated in the backend.
+       */
+      case nir_op_u2u16:
+      case nir_op_i2i16:
+            return nir_src_bit_size(alu->src[0].src) == 32 ? 0 : 1;
+      case nir_op_u2u8:
+      case nir_op_i2i8:
+         return 0;
+
+      /* This is a FMOV with unpack which can be copy propagated in the
+       * backend.
+       */
+      case nir_op_f2f32:
+         return 0;
+
+      /* We assume ushr by const 16 is probably part of a common NIR sequence
+       * to extract the high or low 16-bit of a 2x16-bit value, wich will
+       * optimized away by the backend.
+       */
+      case nir_op_ushr: {
+         nir_scalar s = nir_get_scalar(alu->src[1].src.ssa, 0);
+         if (!nir_scalar_is_const(s))
+            return false;
+
+         return nir_scalar_as_uint(s) == 16u;
+      }
+
+      default:
+         return 1;
+      }
+   }
 
    /* We should not use very large delays for TMU instructions. Typically,
     * thread switches will be sufficient to hide all or most of the latency,
@@ -1753,10 +1796,70 @@ should_lower_robustness(const nir_intrinsic_instr *intr, const void *data)
         case nir_intrinsic_image_store:
         case nir_intrinsic_image_atomic:
         case nir_intrinsic_image_atomic_swap:
-                return key->robust_image_access;
+                return key->robust_image_access || key->robust_image_access_2;
 
         default:
                 return false;
+        }
+}
+
+static bool
+v3d_lower_txf_lod_robustness_instr(nir_builder *b, nir_tex_instr *txf, void *data)
+{
+        int lod_idx = nir_tex_instr_src_index(txf, nir_tex_src_lod);
+        if (txf->op != nir_texop_txf || lod_idx < 0 ||
+            (nir_src_is_const(txf->src[lod_idx].src) &&
+             nir_src_as_const_value(txf->src[lod_idx].src)->u32 == 0)) {
+                return false;
+        }
+
+        nir_src lod_src = txf->src[lod_idx].src;
+        b->cursor = nir_before_instr(&txf->instr);
+        nir_def *lod = lod_src.ssa;
+        unsigned lod_bit_size = lod->bit_size;
+        nir_def *levels = nir_build_texture_query(b, txf,
+                                                   nir_texop_query_levels, 1,
+                                                   nir_type_uint32,
+                                                   false, false);
+        int coord_idx = nir_tex_instr_src_index(txf, nir_tex_src_coord);
+        assert(coord_idx >= 0);
+
+        nir_def *lod_in_bounds = nir_iand(b, nir_ige(b, lod,
+                                         nir_imm_intN_t(b, 0, lod_bit_size)),
+                                         nir_ilt(b, lod, levels));
+        nir_def *coord = txf->src[coord_idx].src.ssa;
+        nir_if *if_stmt = nir_push_if(b, nir_inot(b, lod_in_bounds));
+        nir_def *oob_elem = nir_imm_intN_t(b, 0x1fffffff, coord->bit_size);
+        nir_def *coord_oob = nir_vector_insert_imm(b, coord, oob_elem, 0);
+        nir_pop_if(b, if_stmt);
+        nir_def *coord_sel = nir_if_phi(b, coord_oob, coord);
+        nir_src_rewrite(&txf->src[coord_idx].src, coord_sel);
+
+        return true;
+}
+
+static bool
+v3d_nir_lower_txf_lod_robustness(nir_shader *s)
+{
+        return nir_shader_tex_pass(s, v3d_lower_txf_lod_robustness_instr,
+                                    nir_metadata_none, NULL);
+}
+
+static bool
+intrinsic_try_skip_helpers(nir_intrinsic_instr *intr, UNUSED void *data)
+{
+        switch(intr->intrinsic) {
+                case nir_intrinsic_image_load:
+                case nir_intrinsic_load_uniform:
+                case nir_intrinsic_load_ubo:
+                case nir_intrinsic_load_ssbo:
+                case nir_intrinsic_load_scratch:
+                case nir_intrinsic_load_shared:
+                case nir_intrinsic_load_global:
+                case nir_intrinsic_load_global_constant:
+                        return true;
+                default:
+                        return false;
         }
 }
 
@@ -1811,6 +1914,14 @@ v3d_attempt_compile(struct v3d_compile *c)
 
         NIR_PASS(_, c->s, v3d_nir_lower_io, c);
         NIR_PASS(_, c->s, v3d_nir_lower_txf_ms);
+        /* On V3D 4.2, txf instructions with an out-of-bounds LOD do not
+         * return robust values (zero) as required by robustImageAccess2.
+         * This pass rewrites the fetch to a guaranteed out-of-bounds
+         * coordinate when LOD is invalid.
+         */
+        if (c->devinfo->ver < 71 && c->key->robust_image_access_2)
+                NIR_PASS(_, c->s, v3d_nir_lower_txf_lod_robustness);
+
         NIR_PASS(_, c->s, v3d_nir_lower_image_load_store, c);
 
         NIR_PASS(_, c->s, nir_opt_idiv_const, 8);
@@ -1821,7 +1932,7 @@ v3d_attempt_compile(struct v3d_compile *c)
         NIR_PASS(_, c->s, nir_lower_alu);
 
         if (c->key->robust_uniform_access || c->key->robust_storage_access ||
-            c->key->robust_image_access) {
+            c->key->robust_image_access || c->key->robust_image_access_2) {
                 /* nir_lower_robust_access assumes constant buffer
                  * indices on ubo/ssbo intrinsics so run copy propagation and
                  * constant folding passes before we run the lowering to warrant
@@ -1836,13 +1947,11 @@ v3d_attempt_compile(struct v3d_compile *c)
         }
 
         NIR_PASS(_, c->s, nir_lower_vars_to_scratch,
-                 nir_var_function_temp,
                  0,
                  glsl_get_natural_size_align_bytes,
                  glsl_get_natural_size_align_bytes);
 
         NIR_PASS(_, c->s, v3d_nir_lower_global_2x32);
-        NIR_PASS(_, c->s, nir_lower_wrmasks);
         NIR_PASS(_, c->s, v3d_nir_lower_load_store_bitsize);
         NIR_PASS(_, c->s, v3d_nir_lower_scratch);
 
@@ -1866,6 +1975,14 @@ v3d_attempt_compile(struct v3d_compile *c)
 
         v3d_optimize_nir(c, c->s);
 
+        const unsigned lower_flrp =
+                (c->s->options->lower_flrp16 ? 16 : 0) |
+                (c->s->options->lower_flrp32 ? 32 : 0) |
+                (c->s->options->lower_flrp64 ? 64 : 0);
+
+        NIR_PASS(_, c->s, nir_lower_flrp, lower_flrp,
+                 false /* always_precise */);
+
         /* Do late algebraic optimization to turn add(a, neg(b)) back into
          * subs, then the mandatory cleanup after algebraic.  Note that it may
          * produce fnegs, and if so then we need to keep running to squash
@@ -1882,8 +1999,17 @@ v3d_attempt_compile(struct v3d_compile *c)
         }
 
         NIR_PASS(_, c->s, nir_lower_bool_to_int32);
-        NIR_PASS(_, c->s, nir_convert_to_lcssa, true, true);
         nir_divergence_analysis(c->s);
+
+        if (c->s->info.stage == MESA_SHADER_FRAGMENT) {
+                nir_opt_load_skip_helpers_options skip_helper_options = {
+                        .no_add_divergence = true,
+                        .intrinsic_cb = intrinsic_try_skip_helpers,
+                };
+                NIR_PASS(_, c->s, nir_opt_load_skip_helpers,
+                         &skip_helper_options);
+        }
+
         NIR_PASS(_, c->s, nir_convert_from_ssa, true, true);
 
         struct nir_schedule_options schedule_options = {
@@ -2094,7 +2220,7 @@ uint64_t *v3d_compile(const struct v3d_compiler *compiler,
 
                         if (ret >= 0) {
                                 if (V3D_DBG(PERF))
-                                        fprintf(stderr, "%s\n", debug_msg);
+                                        mesa_logi("%s", debug_msg);
 
                                 c->debug_output(debug_msg, c->debug_output_data);
                                 free(debug_msg);
@@ -2145,7 +2271,7 @@ uint64_t *v3d_compile(const struct v3d_compiler *compiler,
                                                    c->program_id, c->variant_id,
                                                    c->spills, c->fills);
                                 if (ret >= 0) {
-                                        fprintf(stderr, "%s\n", debug_msg);
+                                        mesa_logi("%s", debug_msg);
                                         c->debug_output(debug_msg, c->debug_output_data);
                                         free(debug_msg);
                                 }
@@ -2175,7 +2301,7 @@ uint64_t *v3d_compile(const struct v3d_compiler *compiler,
                                    vir_get_stage_name(c),
                                    c->program_id, c->variant_id,
                                    c->spills, c->fills);
-                fprintf(stderr, "%s\n", debug_msg);
+                mesa_logi("%s", debug_msg);
 
                 if (ret >= 0) {
                         c->debug_output(debug_msg, c->debug_output_data);
@@ -2184,9 +2310,8 @@ uint64_t *v3d_compile(const struct v3d_compiler *compiler,
         }
 
         if (c->compilation_result != V3D_COMPILATION_SUCCEEDED) {
-                fprintf(stderr, "Failed to compile %s prog %d/%d "
-                        "with any strategy.\n",
-                        vir_get_stage_name(c), c->program_id, c->variant_id);
+                mesa_loge("Failed to compile %s prog %d/%d with any strategy",
+                          vir_get_stage_name(c), c->program_id, c->variant_id);
 
                 vir_compile_destroy(c);
                 return NULL;
@@ -2204,7 +2329,7 @@ uint64_t *v3d_compile(const struct v3d_compiler *compiler,
         int ret = v3d_shaderdb_dump(c, &shaderdb);
         if (ret >= 0) {
                 if (V3D_DBG(SHADERDB))
-                        fprintf(stderr, "SHADER-DB-%s - %s\n", s->info.name, shaderdb);
+                        mesa_logi("SHADER-DB-%s - %s", s->info.name, shaderdb);
 
                 c->debug_output(shaderdb, c->debug_output_data);
                 free(shaderdb);
@@ -2392,9 +2517,8 @@ vir_uniform(struct v3d_compile *c,
                 if (stage_progress) {                                   \
                         progress = true;                                \
                         if (print_opt_debug) {                          \
-                                fprintf(stderr,                         \
-                                        "VIR opt pass %2d: %s progress\n", \
-                                        pass, #func);                   \
+                                mesa_logd("VIR opt pass %2d: %s progress\n", \
+                                          pass, #func);                 \
                         }                                               \
                         /*XXX vir_validate(c);*/                        \
                 }                                                       \
@@ -2414,6 +2538,8 @@ vir_optimize(struct v3d_compile *c)
                 OPTPASS(vir_opt_dead_code);
                 OPTPASS(vir_opt_small_immediates);
                 OPTPASS(vir_opt_constant_alu);
+                OPTPASS(vir_opt_alu);
+                OPTPASS(vir_opt_redundant_setnnmode);
 
                 if (!progress)
                         break;

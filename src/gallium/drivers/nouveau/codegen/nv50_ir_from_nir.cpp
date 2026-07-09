@@ -1578,7 +1578,7 @@ Converter::visit(nir_cf_node *node)
 bool
 Converter::visit(nir_block *block)
 {
-   if (!block->predecessors.entries && exec_list_is_empty(&block->instr_list))
+   if (!nir_block_num_preds(block) && exec_list_is_empty(&block->instr_list))
       return true;
 
    BasicBlock *bb = convert(block);
@@ -2802,14 +2802,6 @@ Converter::visit(nir_alu_instr *insn)
       mkOp3(OP_INSBF, TYPE_U32, newDefs[0], tmpH, mkImm(0x1010), tmpL);
       break;
    }
-   case nir_op_unpack_half_2x16_split_x:
-   case nir_op_unpack_half_2x16_split_y: {
-      LValues &newDefs = convert(&insn->def);
-      Instruction *cvt = mkCvt(OP_CVT, TYPE_F32, newDefs[0], TYPE_F16, getSrc(&insn->src[0]));
-      if (op == nir_op_unpack_half_2x16_split_y)
-         cvt->subOp = 1;
-      break;
-   }
    case nir_op_unpack_64_2x32: {
       LValues &newDefs = convert(&insn->def);
       mkOp1(OP_SPLIT, dType, newDefs[0], getSrc(&insn->src[0]))->setDef(1, newDefs[1]);
@@ -3003,7 +2995,7 @@ Converter::visit(nir_alu_instr *insn)
 
    if (!oldPos) {
       oldPos = this->bb->getEntry();
-      oldPos->precise = insn->exact;
+      oldPos->precise = nir_alu_instr_is_exact(insn);
    }
 
    if (unlikely(!oldPos))
@@ -3011,7 +3003,7 @@ Converter::visit(nir_alu_instr *insn)
 
    while (oldPos->next) {
       oldPos = oldPos->next;
-      oldPos->precise = insn->exact;
+      oldPos->precise = nir_alu_instr_is_exact(insn);
    }
 
    return true;
@@ -3503,6 +3495,7 @@ Converter::run()
       NIR_PASS(_, nir, nv_nir_move_stores_to_end);
 
    NIR_PASS(_, nir, nir_opt_algebraic_late);
+   NIR_PASS(_, nir, nir_opt_dce);
 
    NIR_PASS(_, nir, nir_lower_bool_to_int32);
    NIR_PASS(_, nir, nir_lower_bit_size, Converter::lowerBitSizeCB, this);
@@ -3588,7 +3581,6 @@ nvir_nir_shader_compiler_options(int chipset, uint8_t shader_type)
    op.lower_fneg = false;
    op.lower_ineg = false;
    op.lower_scmp = true; // TODO: not implemented yet
-   op.lower_vector_cmp = false;
    op.lower_bitops = false;
    op.lower_isign = (chipset >= NVISA_GV100_CHIPSET);
    op.lower_fsign = (chipset >= NVISA_GV100_CHIPSET);
@@ -3598,7 +3590,6 @@ nvir_nir_shader_compiler_options(int chipset, uint8_t shader_type)
    op.lower_ffract = true;
    op.lower_fceil = false; // TODO
    op.lower_ftrunc = false;
-   op.lower_ldexp = true;
    op.lower_pack_half_2x16 = true;
    op.lower_pack_unorm_2x16 = true;
    op.lower_pack_snorm_2x16 = true;

@@ -162,7 +162,13 @@
  *    * Eliminated output stores get the "no_varying" flag if they are also
  *      xfb stores or write sysval outputs.
  *
- * 5. Backward inter-shader code motion
+ * 5. Link signed zero information
+ *
+ *    If no loads care about the sign of zero, and if there is no xfb or
+ *    sign aware sysval usage, set the no_signed_zero flag for output stores.
+ *    This can then be further back propagated by `nir_opt_fp_math_ctrl`.
+ *
+ * 6. Backward inter-shader code motion
  *
  *    "Backward" refers to moving code in the opposite direction that shaders
  *    are executed, i.e. moving code from the consumer to the producer.
@@ -178,8 +184,9 @@
  *    possibly reducing the number of inputs, uniforms, and UBOs by 1.
  *
  *    Such code motion can be performed for any expression sourcing only
- *    inputs, constants, and uniforms except for fragment shaders, which can
- *    also do it but with the following limitations:
+ *    inputs, constants, uniforms, and primitive-convergent system values
+ *    except for fragment shaders, which can also do it but with
+ *    the following limitations:
  *    * Only these transformations can be perfomed with interpolated inputs
  *      and any composition of these transformations (such as lerp), which can
  *      all be proven mathematically:
@@ -203,7 +210,7 @@
  *      the removed non-convergent inputs that should all have the same (i, j).
  *      If there are no non-convergent inputs, then the new input is declared
  *      as flat (for simplicity; we can't choose the barycentric coordinates
- *      at random because AMD doesn't like when there are multiple sets of
+ *      at random because AMD performs worse when there are multiple sets of
  *      barycentric coordinates in the same shader unnecessarily).
  *    * Inf values break code motion across interpolation. See the section
  *      discussing how we handle it near the end.
@@ -328,7 +335,7 @@
  *    the above case (which is temp0 and temp1 to replace all 3 inputs), let
  *    us know.
  *
- * 6. Forward inter-shader code motion
+ * 7. Forward inter-shader code motion
  *
  *    TODO: Not implemented. The text below is a draft of the description.
  *
@@ -364,7 +371,7 @@
  *    we don't increase the GPU overhead measurably by moving code across
  *    pipeline stages that amplify GPU work.
  *
- * 7. Compaction to vec4 slots (AKA packing)
+ * 8. Compaction to vec4 slots (AKA packing)
  *
  *    First, varyings are divided into these groups, and components from each
  *    group are assigned locations in this order (effectively forcing
@@ -446,7 +453,7 @@
  *
  * When we decide not to interpolate a varying, we need to convert Infs to
  * NaNs manually. Infs can be converted to NaNs like this: x*0 + x
- * (suggested by Ian Romanick, the multiplication must be "exact")
+ * (suggested by Ian Romanick, the multiplication must preserve nans/infs")
  *
  * Changes to optimizations:
  * - When we propagate a uniform expression and NaNs must be preserved,
@@ -659,6 +666,7 @@ struct linkage_info {
    bool has_flexible_interp;
    bool always_interpolate_convergent_fs_inputs;
    bool group_tes_inputs_into_pos_var_groups;
+   bool can_compact_to_higher_16;
 
    mesa_shader_stage producer_stage;
    mesa_shader_stage consumer_stage;
@@ -762,6 +770,11 @@ struct linkage_info {
     */
    BITSET_DECLARE(convergent32_mask, NUM_SCALAR_SLOTS);
    BITSET_DECLARE(convergent16_mask, NUM_SCALAR_SLOTS);
+
+   /* Mask of components that have an input load, xfb, or sysval usage that
+    * cares about the sign of zero.
+    */
+   BITSET_DECLARE(signed_zero_mask, NUM_SCALAR_SLOTS);
 };
 
 /******************************************************************
@@ -926,10 +939,7 @@ has_xfb(nir_intrinsic_instr *intr)
 
    unsigned comp = nir_intrinsic_component(intr);
 
-   if (comp >= 2)
-      return nir_intrinsic_io_xfb2(intr).out[comp - 2].num_components > 0;
-   else
-      return nir_intrinsic_io_xfb(intr).out[comp].num_components > 0;
+   return nir_intrinsic_io_xfb(intr).out[comp].num_components > 0;
 }
 
 static bool
@@ -1017,20 +1027,20 @@ get_interp_vec4_type(struct linkage_info *linkage, unsigned slot,
 }
 
 static bool
-preserve_infs_nans(nir_shader *nir, unsigned bit_size)
+uses_preserve_nans(nir_def *def)
 {
-   unsigned mode = nir->info.float_controls_execution_mode;
+   nir_foreach_use_including_if(use, def) {
+      if (nir_src_is_if(use))
+         return true;
+      if (!nir_src_is_alu(*use))
+         return true;
 
-   return nir_is_float_control_inf_preserve(mode, bit_size) ||
-          nir_is_float_control_nan_preserve(mode, bit_size);
-}
+      nir_alu_instr *alu = nir_src_as_alu(*use);
+      if (nir_alu_instr_is_nan_preserve(alu))
+         return true;
+   }
 
-static bool
-preserve_nans(nir_shader *nir, unsigned bit_size)
-{
-   unsigned mode = nir->info.float_controls_execution_mode;
-
-   return nir_is_float_control_nan_preserve(mode, bit_size);
+   return false;
 }
 
 static nir_def *
@@ -1038,29 +1048,14 @@ build_convert_inf_to_nan(nir_builder *b, nir_def *x)
 {
    /* Do x*0 + x. The multiplication by 0 can't be optimized out. */
    nir_def *fma = nir_ffma_imm1(b, x, 0, x);
-   nir_def_as_alu(fma)->exact = true;
+   nir_def_as_alu(fma)->fp_math_ctrl = nir_fp_preserve_nan | nir_fp_preserve_inf | nir_fp_exact;
    return fma;
 }
 
 static bool
 is_sysval(nir_instr *instr, gl_system_value sysval)
 {
-   if (instr->type == nir_instr_type_intrinsic) {
-      nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
-
-      if (intr->intrinsic == nir_intrinsic_from_system_value(sysval))
-         return true;
-
-      if (intr->intrinsic == nir_intrinsic_load_deref) {
-         nir_deref_instr *deref =
-            nir_def_as_deref(intr->src[0].ssa);
-
-         return nir_deref_mode_is_one_of(deref, nir_var_system_value) &&
-                nir_deref_instr_get_variable(deref)->data.location == sysval;
-      }
-   }
-
-   return false;
+   return nir_system_value_from_instr(instr) == sysval;
 }
 
 /******************************************************************
@@ -1074,6 +1069,32 @@ is_active_sysval_output(struct linkage_info *linkage, unsigned slot,
    return nir_slot_is_sysval_output(vec4_slot(slot),
                                     linkage->consumer_stage) &&
           !nir_intrinsic_io_semantics(intr).no_sysval_output;
+}
+
+static bool
+is_sz_sysval(struct linkage_info *linkage, unsigned slot,
+             nir_intrinsic_instr *intr)
+{
+   if (!is_active_sysval_output(linkage, slot, intr))
+      return false;
+
+   switch (vec4_slot(slot)) {
+   case VARYING_SLOT_POS:
+   case VARYING_SLOT_CLIP_VERTEX:
+   case VARYING_SLOT_PSIZ:
+   case VARYING_SLOT_CLIP_DIST0:
+   case VARYING_SLOT_CLIP_DIST1:
+   case VARYING_SLOT_CULL_DIST0:
+   case VARYING_SLOT_CULL_DIST1:
+      return false;
+   case VARYING_SLOT_TESS_LEVEL_OUTER:
+   case VARYING_SLOT_TESS_LEVEL_INNER:
+   case VARYING_SLOT_BOUNDING_BOX0:
+   case VARYING_SLOT_BOUNDING_BOX1:
+      /* These enums are aliased with integer mesh outputs. */
+      return linkage->producer_stage != MESA_SHADER_TESS_CTRL;
+   default: return true;
+   }
 }
 
 /**
@@ -1273,15 +1294,12 @@ gather_inputs(struct nir_builder *builder, nir_intrinsic_instr *intr, void *cb_d
    /* nir_lower_io_to_scalar is required before this */
    assert(intr->def.num_components == 1);
    /* Non-zero constant offsets should have been folded by
-    * nir_io_add_const_offset_to_base.
+    * nir_opt_constant_folding.
     */
    nir_src offset = *nir_get_io_offset_src(intr);
    assert(!nir_src_is_const(offset) || nir_src_as_uint(offset) == 0);
 
    nir_io_semantics sem = nir_intrinsic_io_semantics(intr);
-
-   if (!can_remove_varying(linkage, sem.location))
-      return false;
 
    /* Insert the load into the list of loads for this scalar slot. */
    unsigned slot = intr_get_scalar_16bit_slot(intr);
@@ -1291,6 +1309,15 @@ gather_inputs(struct nir_builder *builder, nir_intrinsic_instr *intr, void *cb_d
    node->instr = intr;
    list_addtail(&node->head, &in->consumer.loads);
    in->num_slots = MAX2(in->num_slots, sem.num_slots);
+
+   if (!sem.no_signed_zero && intr->intrinsic != nir_intrinsic_load_interpolated_input) {
+      unsigned nsz_count = nir_src_is_const(offset) ? 1 : sem.num_slots;
+      for (unsigned i = 0; i < nsz_count; i++)
+         BITSET_SET(linkage->signed_zero_mask, slot + i * 8);
+   }
+
+   if (!can_remove_varying(linkage, sem.location))
+      return false;
 
    BITSET_SET(linkage->removable_mask, slot);
 
@@ -1515,15 +1542,12 @@ gather_outputs(struct nir_builder *builder, nir_intrinsic_instr *intr, void *cb_
    }
 
    /* Non-zero constant offsets should have been folded by
-    * nir_io_add_const_offset_to_base.
+    * nir_opt_constant_folding.
     */
    nir_src offset = *nir_get_io_offset_src(intr);
    assert(!nir_src_is_const(offset) || nir_src_as_uint(offset) == 0);
 
    nir_io_semantics sem = nir_intrinsic_io_semantics(intr);
-
-   if (!can_remove_varying(linkage, sem.location))
-      return false;
 
    /* For "xx -> FS", treat BFCn stores as COLn to make dead varying
     * elimination do the right thing automatically. The rules are:
@@ -1551,27 +1575,32 @@ gather_outputs(struct nir_builder *builder, nir_intrinsic_instr *intr, void *cb_
    node->instr = intr;
    out->num_slots = MAX2(out->num_slots, sem.num_slots);
 
-   if (is_store) {
-      list_addtail(&node->head, &out->producer.stores);
+   list_addtail(&node->head, is_store ? &out->producer.stores : &out->producer.loads);
 
-      if (has_xfb(intr)) {
-         BITSET_SET(linkage->xfb_mask, slot);
-
-         if (sem.no_varying &&
-             !is_active_sysval_output(linkage, slot, intr)) {
-            if (intr->src[0].ssa->bit_size == 32)
-               BITSET_SET(linkage->xfb32_only_mask, slot);
-            else if (intr->src[0].ssa->bit_size == 16)
-               BITSET_SET(linkage->xfb16_only_mask, slot);
-            else
-               UNREACHABLE("invalid load_input type");
-         }
-      }
-   } else {
-      list_addtail(&node->head, &out->producer.loads);
+   if (is_store ? (is_sz_sysval(linkage, slot, intr) || has_xfb(intr)) : !sem.no_signed_zero) {
+      unsigned nsz_count = nir_src_is_const(offset) ? 1 : sem.num_slots;
+      for (unsigned i = 0; i < nsz_count; i++)
+         BITSET_SET(linkage->signed_zero_mask, slot + i * 8);
    }
 
+   if (!can_remove_varying(linkage, sem.location))
+      return false;
+
    BITSET_SET(linkage->removable_mask, slot);
+
+   if (is_store && has_xfb(intr)) {
+      BITSET_SET(linkage->xfb_mask, slot);
+
+      if (sem.no_varying &&
+          !is_active_sysval_output(linkage, slot, intr)) {
+         if (intr->src[0].ssa->bit_size == 32)
+            BITSET_SET(linkage->xfb32_only_mask, slot);
+         else if (intr->src[0].ssa->bit_size == 16)
+            BITSET_SET(linkage->xfb16_only_mask, slot);
+         else
+            UNREACHABLE("invalid load_input type");
+      }
+   }
 
    /* Indirect indexing. */
    if (!nir_src_is_const(offset)) {
@@ -2257,13 +2286,15 @@ clone_ssa_impl(struct linkage_info *linkage, nir_builder *b, nir_def *ssa)
                 NIR_MAX_VEC_COMPONENTS);
       }
 
-      alu_clone->exact = alu->exact;
-      alu_clone->no_signed_wrap = alu->no_signed_wrap;
-      alu_clone->no_unsigned_wrap = alu->no_unsigned_wrap;
+      clone = nir_builder_alu_instr_finish_and_insert(b, alu_clone);
+
       alu_clone->def.num_components = alu->def.num_components;
       alu_clone->def.bit_size = alu->def.bit_size;
 
-      clone = nir_builder_alu_instr_finish_and_insert(b, alu_clone);
+      /* nir_builder_alu_instr_finish_and_insert overwrites fp_math_ctrl. */
+      alu_clone->fp_math_ctrl = alu->fp_math_ctrl;
+      alu_clone->no_signed_wrap = alu->no_signed_wrap;
+      alu_clone->no_unsigned_wrap = alu->no_unsigned_wrap;
       break;
    }
 
@@ -2293,15 +2324,28 @@ clone_ssa_impl(struct linkage_info *linkage, nir_builder *b, nir_def *ssa)
          break;
       }
 
-      default:
+      default: {
+         gl_system_value sysval =
+            nir_system_value_from_intrinsic(intr->intrinsic);
+
+         if (sysval != SYSTEM_VALUE_MAX) {
+            clone = nir_load_system_value(b, intr->intrinsic,
+                                          intr->const_index[0],
+                                          intr->def.num_components,
+                                          intr->def.bit_size);
+            break;
+         }
+
          UNREACHABLE("unexpected intrinsic");
+      }
       }
       break;
    }
 
    case nir_instr_type_deref: {
       nir_deref_instr *deref = nir_def_as_deref(ssa);
-      assert(nir_deref_mode_is_one_of(deref, nir_var_uniform | nir_var_mem_ubo));
+      assert(nir_deref_mode_is_one_of(deref, nir_var_uniform | nir_var_mem_ubo |
+                                      nir_var_system_value));
 
       /* Get the uniform from the original shader. */
       nir_variable *var = nir_deref_instr_get_variable(deref);
@@ -2521,7 +2565,7 @@ propagate_uniform_expressions(struct linkage_info *linkage,
              * convert Infs to NaNs manually.
              */
             if (loadi->intrinsic == nir_intrinsic_load_interpolated_input &&
-                preserve_nans(b->shader, clone->bit_size))
+                uses_preserve_nans(&loadi->def))
                clone = build_convert_inf_to_nan(b, clone);
 
             /* Replace the original load. */
@@ -2919,7 +2963,8 @@ find_tes_triangle_interp_3fmul_2fadd(struct linkage_info *linkage, unsigned i)
       /* Only maximum of 3 loads expected. Also reject exact ops because we
        * are going to do an inexact transformation with it.
        */
-      if (!fmul || fmul->op != nir_op_fmul || fmul->exact || num_fmuls == 3 ||
+      if (!fmul || fmul->op != nir_op_fmul || nir_alu_instr_is_exact(fmul) ||
+          num_fmuls == 3 ||
           !gather_fmul_tess_coord(iter->instr, fmul, vertex_index,
                                   &tess_coord_swizzle, &tess_coord_used,
                                   &load_tess_coord))
@@ -2930,7 +2975,7 @@ find_tes_triangle_interp_3fmul_2fadd(struct linkage_info *linkage, unsigned i)
       /* The multiplication must only be used by fadd. Also reject exact ops.
        */
       nir_alu_instr *fadd = get_single_use_as_alu(&fmul->def);
-      if (!fadd || fadd->op != nir_op_fadd || fadd->exact)
+      if (!fadd || fadd->op != nir_op_fadd || nir_alu_instr_is_exact(fadd))
          return false;
 
       /* The 3 fmuls must only be used by 2 fadds. */
@@ -3011,7 +3056,7 @@ find_tes_triangle_interp_1fmul_2ffma(struct linkage_info *linkage, unsigned i)
        * with it.
        */
       if (!alu || (alu->op != nir_op_fmul && alu->op != nir_op_ffma) ||
-          alu->exact ||
+          nir_alu_instr_is_exact(alu) ||
           !gather_fmul_tess_coord(iter->instr, alu, vertex_index,
                                   &tess_coord_swizzle, &tess_coord_used,
                                   &load_tess_coord))
@@ -3115,7 +3160,7 @@ static bool
 can_move_alu_across_interp(struct linkage_info *linkage, nir_alu_instr *alu)
 {
    /* Exact ALUs can't be moved across interpolation. */
-   if (alu->exact)
+   if (nir_alu_instr_is_exact(alu))
       return false;
 
    /* Interpolation converts Infs to NaNs. If we turn a result of an ALU
@@ -3123,7 +3168,7 @@ can_move_alu_across_interp(struct linkage_info *linkage, nir_alu_instr *alu)
     * that instruction, while removing the Infs to NaNs conversion for sourced
     * interpolated values. We can't do that if Infs and NaNs must be preserved.
     */
-   if (preserve_infs_nans(linkage->consumer_builder.shader, alu->def.bit_size))
+   if (nir_alu_instr_is_inf_preserve(alu) || nir_alu_instr_is_nan_preserve(alu))
       return false;
 
    switch (alu->op) {
@@ -3163,6 +3208,26 @@ can_move_alu_across_interp(struct linkage_info *linkage, nir_alu_instr *alu)
 
    default:
       /* Moving other ALU instructions across interpolation is illegal. */
+      return false;
+   }
+}
+
+static bool
+is_sysval_movable(struct linkage_info *linkage, nir_instr *instr)
+{
+   /* System values that are convergent within a primitive and are available
+    * in both shader stages should be listed here.
+    *
+    * LAYER could be listed too. Note that expressions with VARYING_SLOT_LAYER
+    * are already moved by this pass, but not if it's a sysval.
+    *
+    * PRIMITIVE_ID and FRONT_FACE could also be listed if the driver supports
+    * them in the producer such as VS. (AMD supports both in the VS)
+    */
+   switch (nir_system_value_from_instr(instr)) {
+   case SYSTEM_VALUE_VIEW_INDEX:
+      return true;
+   default:
       return false;
    }
 }
@@ -3251,6 +3316,11 @@ update_movable_flags(struct linkage_info *linkage, nir_instr *instr)
    }
 
    case nir_instr_type_intrinsic: {
+      if (is_sysval_movable(linkage, instr)) {
+         instr->pass_flags |= FLAG_MOVABLE;
+         return;
+      }
+
       /* Movable input loads already have FLAG_MOVABLE on them.
        * Unmovable input loads skipped by initialization get UNMOVABLE here.
        * (e.g. colors, texcoords)
@@ -3355,7 +3425,7 @@ update_movable_flags(struct linkage_info *linkage, nir_instr *instr)
 
 /* Gather the input loads used by the post-dominator using DFS. */
 static void
-gather_used_input_loads(nir_instr *instr,
+gather_used_input_loads(struct linkage_info *linkage, nir_instr *instr,
                         nir_intrinsic_instr *loads[NUM_SCALAR_SLOTS],
                         unsigned *num_loads)
 {
@@ -3369,7 +3439,7 @@ gather_used_input_loads(nir_instr *instr,
       unsigned num_srcs = nir_op_infos[alu->op].num_inputs;
 
       for (unsigned i = 0; i < num_srcs; i++) {
-         gather_used_input_loads(nir_def_instr(alu->src[i].src.ssa),
+         gather_used_input_loads(linkage, nir_def_instr(alu->src[i].src.ssa),
                                  loads, num_loads);
       }
       return;
@@ -3383,7 +3453,7 @@ gather_used_input_loads(nir_instr *instr,
          return;
 
       case nir_intrinsic_load_deref:
-         gather_used_input_loads(nir_def_instr(intr->src[0].ssa),
+         gather_used_input_loads(linkage, nir_def_instr(intr->src[0].ssa),
                                  loads, num_loads);
          return;
 
@@ -3398,6 +3468,9 @@ gather_used_input_loads(nir_instr *instr,
          return;
 
       default:
+         if (is_sysval_movable(linkage, instr))
+            return;
+
          printf("%u\n", intr->intrinsic);
          UNREACHABLE("unexpected intrinsic");
       }
@@ -3408,7 +3481,7 @@ gather_used_input_loads(nir_instr *instr,
       nir_deref_instr *parent = nir_deref_instr_parent(deref);
 
       if (parent)
-         gather_used_input_loads(&parent->instr, loads, num_loads);
+         gather_used_input_loads(linkage, &parent->instr, loads, num_loads);
 
       switch (deref->deref_type) {
       case nir_deref_type_var:
@@ -3416,7 +3489,7 @@ gather_used_input_loads(nir_instr *instr,
          return;
 
       case nir_deref_type_array:
-         gather_used_input_loads(nir_def_instr(deref->arr.index.ssa),
+         gather_used_input_loads(linkage, nir_def_instr(deref->arr.index.ssa),
                                  loads, num_loads);
          return;
 
@@ -3451,7 +3524,7 @@ try_move_postdominator(struct linkage_info *linkage,
    /* Gather the input loads used by the post-dominator using DFS. */
    nir_intrinsic_instr *loads[NUM_SCALAR_SLOTS * 8];
    unsigned num_loads = 0;
-   gather_used_input_loads(postdom, loads, &num_loads);
+   gather_used_input_loads(linkage, postdom, loads, &num_loads);
    assert(num_loads && "no loads were gathered");
 
    /* Clear the flag set by gather_used_input_loads. */
@@ -4091,6 +4164,18 @@ backward_inter_shader_code_motion(struct linkage_info *linkage,
                        alu->src[1].src.ssa == load_def)))))
                   continue;
 
+               /* Skip upconversions, those are usually cheap and moving them
+                * back just increases memory pressure without helping performance.
+                */
+               unsigned input_size = 0;
+               for (int i = 0; i < nir_op_infos[alu->op].num_inputs; i++) {
+                  nir_src *src = &alu->src[i].src;
+                  input_size += nir_src_bit_size(*src) *
+                     nir_src_num_components(*src);
+               }
+               if (input_size < alu->def.bit_size * alu->def.num_components)
+                  continue;
+
                bit_size = alu->def.bit_size;
             } else if (iter->type == nir_instr_type_intrinsic) {
                nir_intrinsic_instr *intr = nir_instr_as_intrinsic(iter);
@@ -4142,6 +4227,35 @@ backward_inter_shader_code_motion(struct linkage_info *linkage,
 }
 
 /******************************************************************
+ * SIGNED ZERO LINKING
+ ******************************************************************/
+
+static void
+link_no_signed_zero(struct linkage_info *linkage,
+                    nir_opt_varyings_progress *progress)
+{
+   for (unsigned slot = 0; slot < NUM_SCALAR_SLOTS; slot++) {
+      struct scalar_slot *scalar_slot = &linkage->slot[slot];
+
+      list_for_each_entry(struct list_node, iter, &scalar_slot->producer.stores, head) {
+         nir_io_semantics sem = nir_intrinsic_io_semantics(iter->instr);
+
+         bool no_signed_zero = true;
+         unsigned nsz_count = nir_src_is_const(*nir_get_io_offset_src(iter->instr)) ? 1 : sem.num_slots;
+         for (unsigned i = 0; i < nsz_count; i++)
+            no_signed_zero &= !BITSET_TEST(linkage->signed_zero_mask, slot + i * 8);
+
+         if (sem.no_signed_zero != no_signed_zero) {
+            *progress |= nir_progress_producer;
+            sem.no_signed_zero = no_signed_zero;
+            nir_intrinsic_set_io_semantics(iter->instr, sem);
+         }
+      }
+   }
+}
+
+
+/******************************************************************
  * COMPACTION
  ******************************************************************/
 
@@ -4183,24 +4297,13 @@ relocate_slot(struct linkage_info *linkage, struct scalar_slot *slot,
           */
          if (has_xfb(intr)) {
             unsigned old_component = nir_intrinsic_component(intr);
-            static const nir_io_xfb clear_xfb;
             nir_io_xfb xfb;
-            bool new_is_odd = new_component % 2 == 1;
 
             memset(&xfb, 0, sizeof(xfb));
 
-            if (old_component >= 2) {
-               xfb.out[new_is_odd] = nir_intrinsic_io_xfb2(intr).out[old_component - 2];
-               nir_intrinsic_set_io_xfb2(intr, clear_xfb);
-            } else {
-               xfb.out[new_is_odd] = nir_intrinsic_io_xfb(intr).out[old_component];
-               nir_intrinsic_set_io_xfb(intr, clear_xfb);
-            }
+            xfb.out[new_component] = nir_intrinsic_io_xfb(intr).out[old_component];
 
-            if (new_component >= 2)
-               nir_intrinsic_set_io_xfb2(intr, xfb);
-            else
-               nir_intrinsic_set_io_xfb(intr, xfb);
+            nir_intrinsic_set_io_xfb(intr, xfb);
          }
 
          nir_io_semantics sem = nir_intrinsic_io_semantics(intr);
@@ -4304,8 +4407,7 @@ relocate_slot(struct linkage_info *linkage, struct scalar_slot *slot,
              * we need to convert Infs to NaNs manually in the producer to
              * preserve that.
              */
-            if (preserve_nans(linkage->consumer_builder.shader,
-                              load->bit_size)) {
+            if (uses_preserve_nans(load)) {
                list_for_each_entry(struct list_node, iter,
                                    &slot->producer.stores, head) {
                   nir_intrinsic_instr *store = iter->instr;
@@ -4786,8 +4888,9 @@ vs_tcs_tes_gs_assign_slots_2sets(struct linkage_info *linkage,
     */
    vs_tcs_tes_gs_assign_slots(linkage, input32_mask, slot_index,
                               patch_slot_index, 2, progress);
+   unsigned slot_size_16bit = linkage->can_compact_to_higher_16 ? 1 : 2;
    vs_tcs_tes_gs_assign_slots(linkage, input16_mask, slot_index,
-                              patch_slot_index, 1, progress);
+                              patch_slot_index, slot_size_16bit, progress);
 
    assert(*slot_index <= VARYING_SLOT_MAX * 8);
    assert(!patch_slot_index || *patch_slot_index <= VARYING_SLOT_TESS_MAX * 8);
@@ -4808,6 +4911,7 @@ static void
 compact_varyings(struct linkage_info *linkage,
                  nir_opt_varyings_progress *progress)
 {
+   unsigned slot_size_16bit = linkage->can_compact_to_higher_16 ? 1 : 2;
    if (linkage->consumer_stage == MESA_SHADER_FRAGMENT) {
       /* These arrays are used to track which scalar slots we've already
        * assigned. We can fill unused components of indirectly-indexed slots,
@@ -4864,7 +4968,7 @@ compact_varyings(struct linkage_info *linkage,
          fs_assign_slot_groups(linkage, assigned_mask, assigned_fs_vec4_type,
                                linkage->interp_fp16_mask, linkage->flat16_mask,
                                linkage->convergent16_mask, NULL,
-                               FS_VEC4_TYPE_INTERP_FP16, 1, false, 0, progress);
+                               FS_VEC4_TYPE_INTERP_FP16, slot_size_16bit, false, 0, progress);
       } else {
          /* Basically the same as above. */
          fs_assign_slot_groups_separate_qual(
@@ -4877,7 +4981,7 @@ compact_varyings(struct linkage_info *linkage,
             linkage, assigned_mask, assigned_fs_vec4_type,
             &linkage->interp_fp16_qual_masks, linkage->flat16_mask,
             linkage->convergent16_mask, NULL,
-            FS_VEC4_TYPE_INTERP_FP16_PERSP_PIXEL, 1, false, 0, progress);
+            FS_VEC4_TYPE_INTERP_FP16_PERSP_PIXEL, slot_size_16bit, false, 0, progress);
       }
 
       /* Assign INTERP_MODE_EXPLICIT. Both FP32 and FP16 can occupy the same
@@ -5148,8 +5252,8 @@ default_varying_estimate_instr_cost(nir_instr *instr)
       case nir_op_fsqrt:
       case nir_op_fsin:
       case nir_op_fcos:
-      case nir_op_fsin_amd:
-      case nir_op_fcos_amd:
+      case nir_op_fsin_normalized_2_pi:
+      case nir_op_fcos_normalized_2_pi:
          /* FP64 is usually much slower. */
          return dst_bit_size == 64 ? 32 : 4;
 
@@ -5245,7 +5349,10 @@ init_linkage(nir_shader *producer, nir_shader *consumer, bool spirv,
       .group_tes_inputs_into_pos_var_groups =
          consumer->info.stage == MESA_SHADER_TESS_EVAL &&
          consumer->options->io_options &
-         nir_io_compaction_groups_tes_inputs_into_pos_and_var_groups,
+            nir_io_compaction_groups_tes_inputs_into_pos_and_var_groups,
+      .can_compact_to_higher_16 = producer->options->io_options &
+                                  consumer->options->io_options &
+                                  nir_io_compact_to_higher_16,
       .producer_stage = producer->info.stage,
       .consumer_stage = consumer->info.stage,
       .producer_builder =
@@ -5363,6 +5470,9 @@ nir_opt_varyings(nir_shader *producer, nir_shader *consumer, bool spirv,
    init_linkage(producer, consumer, spirv, max_uniform_components,
                 max_ubos_per_stage, linkage, &progress);
 
+
+   link_no_signed_zero(linkage, &progress);
+
    /* This must be done after deduplication and before inter-shader code
     * motion.
     */
@@ -5437,16 +5547,16 @@ nir_varying_var_mask(nir_shader *nir)
 static nir_opt_varyings_progress
 optimize_varyings(nir_shader *producer, nir_shader *consumer, bool spirv,
                   unsigned max_uniform_comps, unsigned max_ubos,
-                  void (*optimize)(nir_shader *))
+                  void (*optimize)(nir_shader *, void *), void *optimize_data)
 {
    nir_opt_varyings_progress progress =
       nir_opt_varyings(producer, consumer, spirv, max_uniform_comps,
                        max_ubos, false);
 
    if (progress & nir_progress_producer)
-      optimize(producer);
+      optimize(producer, optimize_data);
    if (progress & nir_progress_consumer)
-      optimize(consumer);
+      optimize(consumer, optimize_data);
 
    return progress;
 }
@@ -5460,7 +5570,8 @@ optimize_varyings(nir_shader *producer, nir_shader *consumer, bool spirv,
 void
 nir_opt_varyings_bulk(nir_shader **shaders, uint32_t num_shaders, bool spirv,
                       unsigned max_uniform_comps, unsigned max_ubos,
-                      void (*optimize)(nir_shader *))
+                      void (*optimize)(nir_shader *, void *),
+                      void *optimize_data)
 {
    /* There is nothing to link for only 1 shader. */
    if (num_shaders == 1) {
@@ -5504,7 +5615,7 @@ nir_opt_varyings_bulk(nir_shader **shaders, uint32_t num_shaders, bool spirv,
                NULL, NULL);
 
       /* nir_opt_varyings requires shaders to be optimized. */
-      optimize(nir);
+      optimize(nir, optimize_data);
    }
 
    /* Optimize varyings from the first shader to the last shader first, and
@@ -5523,7 +5634,8 @@ nir_opt_varyings_bulk(nir_shader **shaders, uint32_t num_shaders, bool spirv,
    unsigned highest_changed_producer = 0;
    for (unsigned i = 0; i < num_shaders - 1; i++) {
       if (optimize_varyings(shaders[i], shaders[i + 1], spirv,
-                            max_uniform_comps, max_ubos, optimize) &
+                            max_uniform_comps, max_ubos, optimize,
+                            optimize_data) &
           nir_progress_producer)
          highest_changed_producer = i;
    }
@@ -5533,7 +5645,7 @@ nir_opt_varyings_bulk(nir_shader **shaders, uint32_t num_shaders, bool spirv,
     */
    for (unsigned i = highest_changed_producer; i > 0; i--) {
       optimize_varyings(shaders[i - 1], shaders[i], spirv, max_uniform_comps,
-                        max_ubos, optimize);
+                        max_ubos, optimize, optimize_data);
    }
 
    /* Final cleanups. */

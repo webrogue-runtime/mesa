@@ -33,53 +33,30 @@ static const nir_shader_compiler_options *
 kk_get_nir_options(struct vk_physical_device *vk_pdev, mesa_shader_stage stage,
                    UNUSED const struct vk_pipeline_robustness_state *rs)
 {
-   static nir_shader_compiler_options options = {
-      .lower_fdph = true,
-      .has_fsub = true,
-      .has_isub = true,
-      .lower_extract_word = true,
-      .lower_extract_byte = true,
-      .lower_insert_word = true,
-      .lower_insert_byte = true,
-      .lower_fmod = true,
-      .discard_is_demote = true,
-      .instance_id_includes_base_index = true,
-      .lower_device_index_to_zero = true,
-      .lower_pack_64_2x32_split = true,
-      .lower_unpack_64_2x32_split = true,
-      .lower_pack_64_2x32 = true,
-      .lower_pack_half_2x16 = true,
-      .lower_pack_split = true,
-      .lower_unpack_half_2x16 = true,
-      .has_cs_global_id = true,
-      .lower_vector_cmp = true,
-      .lower_fquantize2f16 = true,
-      .lower_scmp = true,
-      .lower_ifind_msb = true,
-      .lower_ufind_msb = true,
-      .lower_find_lsb = true,
-      .has_uclz = true,
-      .lower_mul_2x32_64 = true,
-      .lower_uadd_carry = true,
-      .lower_usub_borrow = true,
-      /* Metal does not support double. */
-      .lower_doubles_options = (nir_lower_doubles_options)(~0),
-      .lower_int64_options =
-         nir_lower_ufind_msb64 | nir_lower_subgroup_shuffle64,
-   };
-   return &options;
+   return &kk_nir_options;
 }
+
+/* TODO_KOSMICKRISP Once we support robustness2, update these values. */
+static const struct vk_pipeline_robustness_state rs_all_supported = {
+   .uniform_buffers =
+      VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_ROBUST_BUFFER_ACCESS,
+   .storage_buffers =
+      VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_ROBUST_BUFFER_ACCESS,
+   .images = VK_PIPELINE_ROBUSTNESS_IMAGE_BEHAVIOR_ROBUST_IMAGE_ACCESS_2_EXT,
+};
 
 static struct spirv_to_nir_options
 kk_get_spirv_options(struct vk_physical_device *vk_pdev,
                      UNUSED mesa_shader_stage stage,
                      const struct vk_pipeline_robustness_state *rs)
 {
+   if (KK_DEBUG(FORCE_ROBUSTNESS))
+      rs = &rs_all_supported;
    return (struct spirv_to_nir_options){
       .environment = NIR_SPIRV_VULKAN,
-      .ssbo_addr_format = nir_address_format_64bit_bounded_global,
+      .ssbo_addr_format = kk_buffer_addr_format(rs->storage_buffers),
       .phys_ssbo_addr_format = nir_address_format_64bit_global,
-      .ubo_addr_format = nir_address_format_64bit_bounded_global,
+      .ubo_addr_format = kk_buffer_addr_format(rs->uniform_buffers),
       .shared_addr_format = nir_address_format_32bit_offset,
       .min_ssbo_alignment = KK_MIN_SSBO_ALIGNMENT,
       .min_ubo_alignment = KK_MIN_UBO_ALIGNMENT,
@@ -103,6 +80,30 @@ kk_preprocess_nir(UNUSED struct vk_physical_device *vk_pdev, nir_shader *nir,
             nir_shader_get_entrypoint(nir), nir_var_shader_out);
 
    msl_preprocess_nir(nir);
+
+   /* Cannot be part of msl_preprocess_nir since clc does not expose
+    * has_base_workgroup_id */
+   nir_lower_compute_system_values_options csv_options = {
+      .has_base_global_invocation_id = 0,
+      .has_base_workgroup_id = true,
+   };
+   NIR_PASS(_, nir, nir_lower_compute_system_values, &csv_options);
+}
+
+static bool
+has_static_depth_stencil_state(const struct vk_graphics_pipeline_state *state)
+{
+   if (!state->ds)
+      return false;
+
+   return !(
+      BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_DS_DEPTH_TEST_ENABLE) |
+      BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_DS_DEPTH_WRITE_ENABLE) |
+      BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_DS_DEPTH_COMPARE_OP) |
+      BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_DS_STENCIL_TEST_ENABLE) |
+      BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_DS_STENCIL_OP) |
+      BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_DS_STENCIL_COMPARE_MASK) |
+      BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_DS_STENCIL_WRITE_MASK));
 }
 
 struct kk_vs_key {
@@ -123,6 +124,7 @@ kk_populate_vs_key(struct kk_vs_key *key,
 struct kk_fs_key {
    VkFormat color_formats[MESA_VK_MAX_COLOR_ATTACHMENTS];
    struct vk_color_blend_state color_blend;
+   struct vk_depth_stencil_state ds;
    uint32_t rasterization_samples;
    uint16_t static_sample_mask;
    bool has_depth;
@@ -138,6 +140,9 @@ kk_populate_fs_key(struct kk_fs_key *key,
     * non-native formats */
    memcpy(key->color_formats, state->rp->color_attachment_formats,
           sizeof(key->color_formats));
+
+   if (has_static_depth_stencil_state(state))
+      key->ds = *(state->ds);
 
    /* Blend state gets [de]serialized, so we need to hash it */
    if (state->cb)
@@ -172,8 +177,8 @@ kk_hash_graphics_state(struct vk_physical_device *device,
       kk_populate_fs_key(&key, state);
       _mesa_blake3_update(&blake3_ctx, &key, sizeof(key));
 
-      _mesa_blake3_update(&blake3_ctx, &state->rp->view_mask,
-                          sizeof(state->rp->view_mask));
+      _mesa_blake3_update(&blake3_ctx, &state->mv->view_mask,
+                          sizeof(state->mv->view_mask));
    }
 
    _mesa_blake3_final(&blake3_ctx, blake3_out);
@@ -252,21 +257,21 @@ kk_nir_swizzle_fragment_output(nir_builder *b, nir_intrinsic_instr *intrin,
 
    /* Check if we have to apply any swizzle */
    if (!supported_format->is_native) {
-      unsigned channel_swizzle[] = {
-         supported_format->swizzle.red, supported_format->swizzle.green,
-         supported_format->swizzle.blue, supported_format->swizzle.alpha};
+      unsigned channel_unswizzle[] = {
+         supported_format->unswizzle.red, supported_format->unswizzle.green,
+         supported_format->unswizzle.blue, supported_format->unswizzle.alpha};
 
       if (intrin->intrinsic == nir_intrinsic_store_output) {
+         unsigned channel_swizzle[4] = {0u};
+         for (uint32_t i = 0u; i < 4; ++i)
+            channel_swizzle[channel_unswizzle[i]] = i;
+
          b->cursor = nir_before_instr(&intrin->instr);
          nir_def *to_replace = intrin->src[0].ssa;
          nir_def *swizzled = nir_swizzle(b, to_replace, channel_swizzle,
                                          to_replace->num_components);
          nir_src_rewrite(&intrin->src[0], swizzled);
       } else {
-         unsigned channel_unswizzle[4] = {0u};
-         for (uint32_t i = 0u; i < 4; ++i)
-            channel_unswizzle[channel_swizzle[i]] = i;
-
          b->cursor = nir_after_instr(&intrin->instr);
          nir_def *to_replace = &intrin->def;
          nir_def *swizzled = nir_swizzle(b, to_replace, channel_unswizzle,
@@ -286,8 +291,8 @@ kk_lower_vs_vbo(nir_shader *nir, const struct vk_graphics_pipeline_state *state)
           "Fixed-function attributes not used in Vulkan");
    NIR_PASS(_, nir, nir_recompute_io_bases, nir_var_shader_in);
    /* the shader_out portion of this is load-bearing even for tess eval */
-   NIR_PASS(_, nir, nir_io_add_const_offset_to_base,
-            nir_var_shader_in | nir_var_shader_out);
+   /* Fold constant offset srcs for IO. */
+   NIR_PASS(_, nir, nir_opt_constant_folding);
 
    struct kk_attribute attributes[KK_MAX_ATTRIBS] = {};
    uint64_t attribs_read = nir->info.inputs_read >> VERT_ATTRIB_GENERIC0;
@@ -318,6 +323,7 @@ kk_lower_vs(nir_shader *nir, const struct vk_graphics_pipeline_state *state)
       nir_shader_intrinsics_pass(nir, msl_nir_vs_remove_point_size_write,
                                  nir_metadata_control_flow, NULL);
 
+   NIR_PASS(_, nir, nir_lower_clip_halfz_dynamic);
    NIR_PASS(_, nir, msl_nir_vs_io_types);
 }
 
@@ -331,13 +337,15 @@ kk_lower_fs_blend(nir_shader *nir,
       .logicop_func = vk_logic_op_to_pipe(state->cb->logic_op),
    };
 
-   static_assert(ARRAY_SIZE(opts.format) == 8, "max RTs out of sync");
+   static_assert(ARRAY_SIZE(opts.rt) == 8, "max RTs out of sync");
 
-   for (unsigned i = 0; i < ARRAY_SIZE(opts.format); ++i) {
-      opts.format[i] =
+   for (unsigned i = 0; i < ARRAY_SIZE(opts.rt); ++i) {
+      enum pipe_format format =
          vk_format_to_pipe_format(state->rp->color_attachment_formats[i]);
       if (state->cb->attachments[i].blend_enable) {
          opts.rt[i] = (nir_lower_blend_rt){
+            .format = format,
+
             .rgb.src_factor = vk_blend_factor_to_pipe(
                state->cb->attachments[i].src_color_blend_factor),
             .rgb.dst_factor = vk_blend_factor_to_pipe(
@@ -356,6 +364,8 @@ kk_lower_fs_blend(nir_shader *nir,
          };
       } else {
          opts.rt[i] = (nir_lower_blend_rt){
+            .format = format,
+
             .rgb.src_factor = PIPE_BLENDFACTOR_ONE,
             .rgb.dst_factor = PIPE_BLENDFACTOR_ZERO,
             .rgb.func = PIPE_BLEND_ADD,
@@ -368,7 +378,8 @@ kk_lower_fs_blend(nir_shader *nir,
          };
       }
    }
-   NIR_PASS(_, nir, nir_io_add_const_offset_to_base, nir_var_shader_out);
+   /* Fold constant offset srcs for IO. */
+   NIR_PASS(_, nir, nir_opt_constant_folding);
    NIR_PASS(_, nir, nir_lower_blend, &opts);
 }
 
@@ -386,10 +397,25 @@ lower_subpass_dim(nir_builder *b, nir_tex_instr *tex, UNUSED void *_data)
 }
 
 static void
-kk_lower_fs(nir_shader *nir, const struct vk_graphics_pipeline_state *state)
+kk_lower_fs(struct kk_device *dev, nir_shader *nir,
+            const struct vk_graphics_pipeline_state *state)
 {
+   /* msl_nir_lower_sample_shading needs to go before blending since
+    * nir_lower_blend will always set uses_sample_shading to true if there's any
+    * output read. I believe we do not need to lower it always, that is why it
+    * goes here but need to double check. */
+   if (nir->info.fs.uses_sample_shading)
+      NIR_PASS(_, nir, msl_nir_lower_sample_shading);
+
    if (state->cb)
       kk_lower_fs_blend(nir, state);
+
+   enum pipe_format rts[MAX_DRAW_BUFFERS] = {PIPE_FORMAT_NONE};
+   const struct vk_render_pass_state *rp = state->rp;
+   for (uint32_t i = 0u; i < MAX_DRAW_BUFFERS; ++i)
+      rts[i] = vk_format_to_pipe_format(rp->color_attachment_formats[i]);
+
+   NIR_PASS(_, nir, msl_nir_fs_force_output_signedness, rts);
 
    if (state->rp->depth_attachment_format == VK_FORMAT_UNDEFINED ||
        nir->info.fs.early_fragment_tests)
@@ -407,13 +433,33 @@ kk_lower_fs(nir_shader *nir, const struct vk_graphics_pipeline_state *state)
    NIR_PASS(_, nir, msl_nir_fs_io_types);
 
    if (state->ms && state->ms->rasterization_samples &&
-       state->ms->sample_mask != UINT16_MAX)
+       state->ms->sample_mask != UINT16_MAX) {
+
+      /* KK_WORKAROUND_7 */
+      if (!(dev->disabled_workarounds & BITFIELD64_BIT(7))) {
+         if (!nir->info.fs.early_fragment_tests) {
+            nir_function_impl *entrypoint = nir_shader_get_entrypoint(nir);
+            nir_builder b = nir_builder_at(nir_after_impl(entrypoint));
+            nir_discard_if(&b,
+                           nir_ieq_imm(&b, nir_load_sample_mask_in(&b), 0u));
+         }
+      }
       NIR_PASS(_, nir, msl_lower_static_sample_mask, state->ms->sample_mask);
+   }
    /* Check https://github.com/KhronosGroup/Vulkan-Portability/issues/54 for
     * explanation on why we need this. */
    else if (nir->info.fs.needs_full_quad_helper_invocations ||
             nir->info.fs.needs_coarse_quad_helper_invocations)
       NIR_PASS(_, nir, msl_lower_static_sample_mask, 0xFFFFFFFF);
+
+   /* KK_WORKAROUND_5 */
+   if (!(dev->disabled_workarounds & BITFIELD64_BIT(5)))
+      NIR_PASS(_, nir, msl_nir_fake_guard_for_discards);
+   /* KK_WORKAROUND_4 */
+   if (!(dev->disabled_workarounds & BITFIELD64_BIT(4))) {
+      NIR_PASS(_, nir, nir_lower_helper_writes, true);
+      NIR_PASS(_, nir, nir_lower_is_helper_invocation);
+   }
 }
 
 static void
@@ -423,27 +469,28 @@ kk_lower_nir(struct kk_device *dev, nir_shader *nir,
              struct vk_descriptor_set_layout *const *set_layouts,
              const struct vk_graphics_pipeline_state *state)
 {
+   if (KK_DEBUG(FORCE_ROBUSTNESS))
+      rs = &rs_all_supported;
+
+   const nir_opt_access_options access_options = {
+      .is_vulkan = true,
+   };
+   NIR_PASS(_, nir, nir_opt_access, &access_options);
+
    /* Massage IO related variables to please Metal */
    if (nir->info.stage == MESA_SHADER_VERTEX) {
-      NIR_PASS(_, nir, kk_nir_lower_vs_multiview, state->rp->view_mask);
+      NIR_PASS(_, nir, kk_nir_lower_vs_multiview, state->mv->view_mask);
 
       /* kk_nir_lower_vs_multiview may create a temporary array to assign the
        * correct view index. Since we don't handle derefs, we need to get rid of
        * them. */
-      NIR_PASS(_, nir, nir_lower_vars_to_scratch, nir_var_function_temp, 0,
+      NIR_PASS(_, nir, nir_lower_vars_to_scratch, 0,
                glsl_get_natural_size_align_bytes,
                glsl_get_natural_size_align_bytes);
 
       NIR_PASS(_, nir, msl_ensure_vertex_position_output);
    } else if (nir->info.stage == MESA_SHADER_FRAGMENT) {
-      enum pipe_format rts[MAX_DRAW_BUFFERS] = {PIPE_FORMAT_NONE};
-      const struct vk_render_pass_state *rp = state->rp;
-      for (uint32_t i = 0u; i < MAX_DRAW_BUFFERS; ++i)
-         rts[i] = vk_format_to_pipe_format(rp->color_attachment_formats[i]);
-
-      NIR_PASS(_, nir, msl_nir_fs_force_output_signedness, rts);
-
-      NIR_PASS(_, nir, kk_nir_lower_fs_multiview, state->rp->view_mask);
+      NIR_PASS(_, nir, kk_nir_lower_fs_multiview, state->mv->view_mask);
 
       if (state->rp->depth_attachment_format != VK_FORMAT_UNDEFINED &&
           state->ial && state->ial->depth_att != MESA_VK_ATTACHMENT_NO_INDEX) {
@@ -471,9 +518,9 @@ kk_lower_nir(struct kk_device *dev, nir_shader *nir,
    NIR_PASS(_, nir, nir_lower_explicit_io, nir_var_mem_global,
             nir_address_format_64bit_global);
    NIR_PASS(_, nir, nir_lower_explicit_io, nir_var_mem_ssbo,
-            nir_address_format_64bit_bounded_global);
+            kk_buffer_addr_format(rs->storage_buffers));
    NIR_PASS(_, nir, nir_lower_explicit_io, nir_var_mem_ubo,
-            nir_address_format_64bit_bounded_global);
+            kk_buffer_addr_format(rs->uniform_buffers));
 
    NIR_PASS(_, nir, nir_lower_io, nir_var_shader_in | nir_var_shader_out,
             type_size_vec4,
@@ -516,7 +563,7 @@ kk_lower_nir(struct kk_device *dev, nir_shader *nir,
    if (nir->info.stage == MESA_SHADER_VERTEX) {
       kk_lower_vs(nir, state);
    } else if (nir->info.stage == MESA_SHADER_FRAGMENT) {
-      kk_lower_fs(nir, state);
+      kk_lower_fs(dev, nir, state);
    }
 
    /* Descriptor lowering needs to happen after lowering blend since we will
@@ -539,14 +586,17 @@ kk_shader_destroy(struct vk_device *vk_dev, struct vk_shader *vk_shader,
    struct kk_device *dev = container_of(vk_dev, struct kk_device, vk);
    struct kk_shader *shader = container_of(vk_shader, struct kk_shader, vk);
 
-   if (shader->pipeline.cs) {
+   if (shader->info.stage == MESA_SHADER_COMPUTE) {
       mtl_release(shader->pipeline.cs);
-   } else if (shader->pipeline.gfx.handle) {
+   } else if (shader->info.stage == MESA_SHADER_VERTEX) {
       mtl_release(shader->pipeline.gfx.handle);
-      if (shader->pipeline.gfx.mtl_depth_stencil_state_handle)
-         mtl_release(shader->pipeline.gfx.mtl_depth_stencil_state_handle);
+      if (shader->pipeline.gfx.ds_handle)
+         mtl_release(shader->pipeline.gfx.ds_handle);
       shader->pipeline.gfx.handle = NULL;
-      shader->pipeline.gfx.mtl_depth_stencil_state_handle = NULL;
+      shader->pipeline.gfx.ds_handle = NULL;
+
+      ralloc_free((void *)shader->info.vs.frag_msl_code);
+      ralloc_free((void *)shader->info.vs.frag_entrypoint_name);
    }
 
    ralloc_free((void *)shader->msl_code);
@@ -647,9 +697,27 @@ kk_compile_shader(struct kk_device *dev, struct vk_shader_compile_info *info,
    if (info->stage == MESA_SHADER_VERTEX) {
       kk_lower_vs_vbo(nir, state);
    }
+   msl_lower_nir_late(nir);
    msl_optimize_nir(nir);
    modify_nir_info(nir);
-   shader->msl_code = nir_to_msl(nir, NULL, dev->disabled_workarounds);
+
+   struct nir_to_msl_options translate_options = {
+      .mem_ctx = NULL,
+      .disabled_workarounds = dev->disabled_workarounds,
+   };
+   if (nir->info.stage == MESA_SHADER_FRAGMENT) {
+      for (uint32_t i = 0u; i < MAX_DRAW_BUFFERS; ++i) {
+         enum pipe_format format =
+            vk_format_to_pipe_format(state->rp->color_attachment_formats[i]);
+
+         /* If the attachment is unused, default to 4 to avoid issues with alpha
+          * to coverage with unused attachments. */
+         translate_options.rts_component_count[i] =
+            format == PIPE_FORMAT_NONE ? 4u
+                                       : util_format_get_nr_components(format);
+      }
+   }
+   shader->msl_code = nir_to_msl(nir, &translate_options);
    const char *entrypoint_name = nir_shader_get_entrypoint(nir)->function->name;
 
    /* We need to steal so it doesn't get destroyed with the nir. Needs to happen
@@ -704,7 +772,7 @@ kk_compile_nir_shader(struct kk_device *dev, nir_shader *nir,
 }
 
 static void
-nir_opts(nir_shader *nir)
+nir_opts(nir_shader *nir, void *data)
 {
    bool progress;
 
@@ -730,8 +798,6 @@ nir_opts(nir_shader *nir)
       NIR_PASS(progress, nir, nir_opt_phi_precision);
       NIR_PASS(progress, nir, nir_opt_algebraic);
       NIR_PASS(progress, nir, nir_opt_constant_folding);
-      NIR_PASS(progress, nir, nir_io_add_const_offset_to_base,
-               nir_var_shader_in | nir_var_shader_out);
 
       NIR_PASS(progress, nir, nir_opt_undef);
       NIR_PASS(progress, nir, nir_opt_loop_unroll);
@@ -787,70 +853,47 @@ kk_compile_compute_pipeline(struct kk_device *device, struct kk_shader *shader)
    return VK_SUCCESS;
 }
 
-static bool
-has_static_depth_stencil_state(const struct vk_graphics_pipeline_state *state)
-{
-   if (!state->ds)
-      return false;
-
-   return !(
-      BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_DS_DEPTH_TEST_ENABLE) |
-      BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_DS_DEPTH_WRITE_ENABLE) |
-      BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_DS_DEPTH_COMPARE_OP) |
-      BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_DS_STENCIL_TEST_ENABLE) |
-      BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_DS_STENCIL_OP) |
-      BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_DS_STENCIL_COMPARE_MASK) |
-      BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_DS_STENCIL_WRITE_MASK));
-}
-
-mtl_depth_stencil_state *
-kk_compile_depth_stencil_state(struct kk_device *device,
-                               const struct vk_depth_stencil_state *ds,
-                               bool has_depth, bool has_stencil)
+static mtl_depth_stencil_state *
+kk_compile_ds_state(struct kk_device *device, struct kk_shader_info *info)
 {
    mtl_stencil_descriptor *front = NULL;
    mtl_stencil_descriptor *back = NULL;
    mtl_depth_stencil_descriptor *descriptor =
       mtl_new_depth_stencil_descriptor();
-   if (has_depth && ds->depth.test_enable) {
-      mtl_depth_stencil_descriptor_set_depth_write_enabled(
-         descriptor, ds->depth.write_enable);
-      mtl_depth_stencil_descriptor_set_depth_compare_function(
-         descriptor, ds->depth.compare_op);
-   } else {
-      /* Only way to disable is to always pass */
-      mtl_depth_stencil_descriptor_set_depth_write_enabled(descriptor, false);
-      mtl_depth_stencil_descriptor_set_depth_compare_function(
-         descriptor, VK_COMPARE_OP_ALWAYS);
-   }
+   mtl_depth_stencil_descriptor_set_depth_write_enabled(
+      descriptor, info->vs.has_depth_write);
+   mtl_depth_stencil_descriptor_set_depth_compare_function(
+      descriptor, info->vs.depth_compare_op);
 
-   if (has_stencil && ds->stencil.test_enable) {
+   if (info->vs.has_stencil_test) {
       back = mtl_new_stencil_descriptor();
       mtl_stencil_descriptor_set_depth_failure_operation(
-         back, ds->stencil.back.op.depth_fail);
+         back, info->vs.stencil_back.depth_fail);
       mtl_stencil_descriptor_set_stencil_failure_operation(
-         back, ds->stencil.back.op.fail);
+         back, info->vs.stencil_back.fail);
       mtl_stencil_descriptor_set_depth_stencil_pass_operation(
-         back, ds->stencil.back.op.pass);
+         back, info->vs.stencil_back.pass);
       mtl_stencil_descriptor_set_stencil_compare_function(
-         back, ds->stencil.back.op.compare);
-      mtl_stencil_descriptor_set_read_mask(back, ds->stencil.back.compare_mask);
-      mtl_stencil_descriptor_set_write_mask(back, ds->stencil.back.write_mask);
+         back, info->vs.stencil_back.compare);
+      mtl_stencil_descriptor_set_read_mask(back,
+                                           info->vs.stencil_back.compare_mask);
+      mtl_stencil_descriptor_set_write_mask(back,
+                                            info->vs.stencil_back.write_mask);
       mtl_depth_stencil_descriptor_set_back_face_stencil(descriptor, back);
 
       front = mtl_new_stencil_descriptor();
       mtl_stencil_descriptor_set_depth_failure_operation(
-         front, ds->stencil.front.op.depth_fail);
+         front, info->vs.stencil_front.depth_fail);
       mtl_stencil_descriptor_set_stencil_failure_operation(
-         front, ds->stencil.front.op.fail);
+         front, info->vs.stencil_front.fail);
       mtl_stencil_descriptor_set_depth_stencil_pass_operation(
-         front, ds->stencil.front.op.pass);
+         front, info->vs.stencil_front.pass);
       mtl_stencil_descriptor_set_stencil_compare_function(
-         front, ds->stencil.front.op.compare);
+         front, info->vs.stencil_front.compare);
       mtl_stencil_descriptor_set_read_mask(front,
-                                           ds->stencil.front.compare_mask);
+                                           info->vs.stencil_front.compare_mask);
       mtl_stencil_descriptor_set_write_mask(front,
-                                            ds->stencil.front.write_mask);
+                                            info->vs.stencil_front.write_mask);
       mtl_depth_stencil_descriptor_set_front_face_stencil(descriptor, front);
    }
 
@@ -866,98 +909,185 @@ kk_compile_depth_stencil_state(struct kk_device *device,
    return state;
 }
 
+static void
+kk_gather_ds_info(const struct vk_depth_stencil_state *ds, bool has_depth,
+                  bool has_stencil, struct kk_shader_info *info)
+{
+   /* Depth */
+   if (has_depth && ds->depth.test_enable) {
+      info->vs.has_depth_write = ds->depth.write_enable;
+      info->vs.depth_compare_op = ds->depth.compare_op;
+   } else {
+      info->vs.has_depth_write = false;
+      info->vs.depth_compare_op = VK_COMPARE_OP_ALWAYS;
+   }
+
+   /* Stencil */
+   info->vs.has_stencil_test = has_stencil && ds->stencil.test_enable;
+   if (info->vs.has_stencil_test) {
+      info->vs.stencil_back.depth_fail = ds->stencil.back.op.depth_fail;
+      info->vs.stencil_back.fail = ds->stencil.back.op.fail;
+      info->vs.stencil_back.pass = ds->stencil.back.op.pass;
+      info->vs.stencil_back.compare = ds->stencil.back.op.compare;
+      info->vs.stencil_back.compare_mask = ds->stencil.back.compare_mask;
+      info->vs.stencil_back.write_mask = ds->stencil.back.write_mask;
+
+      info->vs.stencil_front.depth_fail = ds->stencil.front.op.depth_fail;
+      info->vs.stencil_front.fail = ds->stencil.front.op.fail;
+      info->vs.stencil_front.pass = ds->stencil.front.op.pass;
+      info->vs.stencil_front.compare = ds->stencil.front.op.compare;
+      info->vs.stencil_front.compare_mask = ds->stencil.front.compare_mask;
+      info->vs.stencil_front.write_mask = ds->stencil.front.write_mask;
+   }
+}
+
+mtl_depth_stencil_state *
+kk_compile_depth_stencil_state(struct kk_device *device,
+                               const struct vk_depth_stencil_state *ds,
+                               bool has_depth, bool has_stencil)
+{
+   struct kk_shader_info info = {};
+   kk_gather_ds_info(ds, has_depth, has_stencil, &info);
+   return kk_compile_ds_state(device, &info);
+}
+
+static struct kk_shader_info
+gather_graphics_pipeline_create_info(
+   const struct vk_graphics_pipeline_state *state, uint32_t attribs_read,
+   struct kk_shader *fs)
+{
+   assert(state && fs && "state and fragment shader are a must");
+   struct kk_shader_info info = {.vs.attribs_read = attribs_read};
+
+   info.vs.topology = vk_primitive_topology_to_mtl_primitive_topology_class(
+      state->ia->primitive_topology);
+
+   /* Render pass data */
+   const struct vk_render_pass_state *rp = state->rp;
+   bool has_depth = rp->depth_attachment_format != VK_FORMAT_UNDEFINED;
+   bool has_stencil = rp->stencil_attachment_format != VK_FORMAT_UNDEFINED;
+   {
+      info.vs.color_attachment_count = rp->color_attachment_count;
+      for (uint8_t i = 0u; i < info.vs.color_attachment_count; ++i) {
+         VkFormat format = rp->color_attachment_formats[i];
+         info.vs.rt_formats[i] = format == VK_FORMAT_UNDEFINED
+                                    ? MTL_PIXEL_FORMAT_INVALID
+                                    : vk_format_to_mtl_pixel_format(format);
+      }
+      info.vs.d_format =
+         has_depth ? vk_format_to_mtl_pixel_format(rp->depth_attachment_format)
+                   : MTL_PIXEL_FORMAT_INVALID;
+      info.vs.s_format =
+         has_stencil
+            ? vk_format_to_mtl_pixel_format(rp->stencil_attachment_format)
+            : MTL_PIXEL_FORMAT_INVALID;
+
+      info.vs.view_mask = state->mv->view_mask;
+   }
+
+   info.vs.has_ds = has_static_depth_stencil_state(state);
+   if (info.vs.has_ds)
+      kk_gather_ds_info(state->ds, has_depth, has_stencil, &info);
+
+   info.vs.has_ms = state->ms != NULL;
+   info.vs.sample_count = 1u;
+   if (info.vs.has_ms) {
+      const struct vk_multisample_state *ms = state->ms;
+      info.vs.sample_count = ms->rasterization_samples;
+      info.vs.has_alpha_to_coverage_enabled = ms->alpha_to_coverage_enable;
+      info.vs.has_alpha_to_one_enabled = ms->alpha_to_one_enable;
+   }
+
+   /* We need to store the fragment source in the vertex too otherwise we won't
+    * be able to create the whole pipeline correctly. */
+   {
+      uint32_t length = strlen(fs->msl_code);
+      info.vs.frag_msl_code = ralloc_size(NULL, length + 1u);
+      strcpy(info.vs.frag_msl_code, fs->msl_code);
+      info.vs.frag_msl_code[length] = '\0';
+
+      length = strlen(fs->entrypoint_name);
+      info.vs.frag_entrypoint_name = ralloc_size(NULL, length + 1u);
+      strcpy(info.vs.frag_entrypoint_name, fs->entrypoint_name);
+      info.vs.frag_entrypoint_name[length] = '\0';
+   }
+
+   return info;
+}
+
 /* TODO_KOSMICKRISP For now we just support vertex and fragment */
 static VkResult
-kk_compile_graphics_pipeline(struct kk_device *device,
-                             struct kk_shader *vertex_shader,
-                             struct kk_shader *fragment_shader,
-                             const struct vk_graphics_pipeline_state *state)
+kk_compile_graphics_pipeline(struct kk_device *device, const char *vs,
+                             const char *vs_entrypoint_name, const char *fs,
+                             const char *fs_entrypoint_name,
+                             struct kk_shader_info *info,
+                             struct kk_pipeline_handles *pipeline)
 {
    VkResult result = VK_SUCCESS;
 
-   assert(vertex_shader->info.stage == MESA_SHADER_VERTEX &&
-          fragment_shader->info.stage == MESA_SHADER_FRAGMENT);
-
-   mtl_library *vertex_library =
-      mtl_new_library(device->mtl_handle, vertex_shader->msl_code);
+   mtl_library *vertex_library = mtl_new_library(device->mtl_handle, vs);
    if (vertex_library == NULL)
       return VK_ERROR_INVALID_SHADER_NV;
 
-   mtl_function *vertex_function = mtl_new_function_with_name(
-      vertex_library, vertex_shader->entrypoint_name);
+   mtl_function *vertex_function =
+      mtl_new_function_with_name(vertex_library, vs_entrypoint_name);
 
-   mtl_library *fragment_library =
-      mtl_new_library(device->mtl_handle, fragment_shader->msl_code);
+   mtl_library *fragment_library = mtl_new_library(device->mtl_handle, fs);
    if (fragment_library == NULL) {
       result = VK_ERROR_INVALID_SHADER_NV;
       goto destroy_vertex;
    }
-   mtl_function *fragment_function = mtl_new_function_with_name(
-      fragment_library, fragment_shader->entrypoint_name);
+   mtl_function *fragment_function =
+      mtl_new_function_with_name(fragment_library, fs_entrypoint_name);
 
    mtl_render_pipeline_descriptor *pipeline_descriptor =
       mtl_new_render_pipeline_descriptor();
    mtl_render_pipeline_descriptor_set_vertex_shader(pipeline_descriptor,
                                                     vertex_function);
-   if (fragment_function)
-      mtl_render_pipeline_descriptor_set_fragment_shader(pipeline_descriptor,
-                                                         fragment_function);
+   mtl_render_pipeline_descriptor_set_fragment_shader(pipeline_descriptor,
+                                                      fragment_function);
+
    /* Layered rendering in Metal requires setting primitive topology class */
    mtl_render_pipeline_descriptor_set_input_primitive_topology(
-      pipeline_descriptor,
-      vk_primitive_topology_to_mtl_primitive_topology_class(
-         state->ia->primitive_topology));
+      pipeline_descriptor, info->vs.topology);
 
-   for (uint8_t i = 0; i < state->rp->color_attachment_count; ++i) {
-      if (state->rp->color_attachment_formats[i] != VK_FORMAT_UNDEFINED)
+   for (uint8_t i = 0; i < info->vs.color_attachment_count; ++i) {
+      if (info->vs.rt_formats[i] != MTL_PIXEL_FORMAT_INVALID)
          mtl_render_pipeline_descriptor_set_color_attachment_format(
-            pipeline_descriptor, i,
-            vk_format_to_mtl_pixel_format(
-               state->rp->color_attachment_formats[i]));
+            pipeline_descriptor, i, info->vs.rt_formats[i]);
    }
 
-   if (state->rp->depth_attachment_format != VK_FORMAT_UNDEFINED)
+   if (info->vs.d_format != MTL_PIXEL_FORMAT_INVALID)
       mtl_render_pipeline_descriptor_set_depth_attachment_format(
-         pipeline_descriptor,
-         vk_format_to_mtl_pixel_format(state->rp->depth_attachment_format));
+         pipeline_descriptor, info->vs.d_format);
 
-   if (state->rp->stencil_attachment_format != VK_FORMAT_UNDEFINED)
+   if (info->vs.s_format != MTL_PIXEL_FORMAT_INVALID)
       mtl_render_pipeline_descriptor_set_stencil_attachment_format(
-         pipeline_descriptor,
-         vk_format_to_mtl_pixel_format(state->rp->stencil_attachment_format));
+         pipeline_descriptor, info->vs.s_format);
 
-   if (has_static_depth_stencil_state(state)) {
-      bool has_depth =
-         state->rp->depth_attachment_format != VK_FORMAT_UNDEFINED;
-      bool has_stencil =
-         state->rp->stencil_attachment_format != VK_FORMAT_UNDEFINED;
-      vertex_shader->pipeline.gfx.mtl_depth_stencil_state_handle =
-         kk_compile_depth_stencil_state(device, state->ds, has_depth,
-                                        has_stencil);
+   if (info->vs.has_ds) {
+      pipeline->gfx.ds_handle = kk_compile_ds_state(device, info);
    }
 
-   if (state->rp->view_mask) {
-      uint32_t max_amplification = util_bitcount(state->rp->view_mask);
+   if (info->vs.view_mask) {
+      uint32_t max_amplification = util_bitcount(info->vs.view_mask);
       mtl_render_pipeline_descriptor_set_max_vertex_amplification_count(
          pipeline_descriptor, max_amplification);
    }
 
-   if (state->ms) {
+   if (info->vs.has_ms) {
       mtl_render_pipeline_descriptor_set_raster_sample_count(
-         pipeline_descriptor, state->ms->rasterization_samples);
+         pipeline_descriptor, info->vs.sample_count);
       mtl_render_pipeline_descriptor_set_alpha_to_coverage(
-         pipeline_descriptor, state->ms->alpha_to_coverage_enable);
+         pipeline_descriptor, info->vs.has_alpha_to_coverage_enabled);
       mtl_render_pipeline_descriptor_set_alpha_to_one(
-         pipeline_descriptor, state->ms->alpha_to_one_enable);
+         pipeline_descriptor, info->vs.has_alpha_to_one_enabled);
    }
 
-   vertex_shader->pipeline.gfx.handle =
+   pipeline->gfx.handle =
       mtl_new_render_pipeline(device->mtl_handle, pipeline_descriptor);
-   if (vertex_shader->pipeline.gfx.handle == NULL)
+   if (pipeline->gfx.handle == NULL)
       result = VK_ERROR_INVALID_SHADER_NV;
-   vertex_shader->pipeline.gfx.primitive_type =
-      vk_primitive_topology_to_mtl_primitive_type(
-         state->ia->primitive_topology);
 
    mtl_release(pipeline_descriptor);
    mtl_release(fragment_function);
@@ -1008,12 +1138,12 @@ kk_compile_shaders(struct vk_device *device, uint32_t shader_count,
 
    uint32_t total_shaders = null_fs ? shader_count + 1 : shader_count;
    nir_opt_varyings_bulk(shaders, total_shaders, true, UINT32_MAX, UINT32_MAX,
-                         nir_opts);
+                         nir_opts, NULL);
    /* Second pass is required because some dEQP-VK.glsl.matrix.sub.dynamic.*
     * would fail otherwise due to vertex outputting vec4 while fragments reading
     * vec3 when in reality only vec3 is needed. */
    nir_opt_varyings_bulk(shaders, total_shaders, true, UINT32_MAX, UINT32_MAX,
-                         nir_opts);
+                         nir_opts, NULL);
 
    for (uint32_t i = 0; i < shader_count; i++) {
       result =
@@ -1071,7 +1201,11 @@ kk_compile_shaders(struct vk_device *device, uint32_t shader_count,
          fs = container_of(frag_shader, struct kk_shader, vk);
       }
 
-      result = kk_compile_graphics_pipeline(dev, vs, fs, state);
+      vs->info = gather_graphics_pipeline_create_info(
+         state, vs->info.vs.attribs_read, fs);
+      result = kk_compile_graphics_pipeline(
+         dev, vs->msl_code, vs->entrypoint_name, fs->msl_code,
+         fs->entrypoint_name, &vs->info, &vs->pipeline);
 
       if (null_fs)
          kk_shader_destroy(&dev->vk, &fs->vk, pAllocator);
@@ -1088,21 +1222,20 @@ kk_shader_serialize(struct vk_device *vk_dev, const struct vk_shader *vk_shader,
 
    blob_write_bytes(blob, &shader->info, sizeof(shader->info));
    uint32_t entrypoint_length = strlen(shader->entrypoint_name) + 1;
-   blob_write_bytes(blob, &entrypoint_length, sizeof(entrypoint_length));
    uint32_t code_length = strlen(shader->msl_code) + 1;
-   blob_write_bytes(blob, &code_length, sizeof(code_length));
+   blob_write_uint32(blob, entrypoint_length);
+   blob_write_uint32(blob, code_length);
    blob_write_bytes(blob, shader->entrypoint_name, entrypoint_length);
    blob_write_bytes(blob, shader->msl_code, code_length);
-   blob_write_bytes(blob, &shader->pipeline, sizeof(shader->pipeline));
 
-   /* We are building a new shader into the cache so we need to retain resources
-    */
-   if (shader->info.stage == MESA_SHADER_COMPUTE)
-      mtl_retain(shader->pipeline.cs);
-   else if (shader->info.stage == MESA_SHADER_VERTEX) {
-      mtl_retain(shader->pipeline.gfx.handle);
-      if (shader->pipeline.gfx.mtl_depth_stencil_state_handle)
-         mtl_retain(shader->pipeline.gfx.mtl_depth_stencil_state_handle);
+   if (shader->info.stage == MESA_SHADER_VERTEX) {
+      entrypoint_length = strlen(shader->info.vs.frag_entrypoint_name) + 1;
+      code_length = strlen(shader->info.vs.frag_msl_code) + 1;
+      blob_write_uint32(blob, entrypoint_length);
+      blob_write_uint32(blob, code_length);
+      blob_write_bytes(blob, shader->info.vs.frag_entrypoint_name,
+                       entrypoint_length);
+      blob_write_bytes(blob, shader->info.vs.frag_msl_code, code_length);
    }
 
    return !blob->out_of_memory;
@@ -1146,19 +1279,48 @@ kk_deserialize_shader(struct vk_device *vk_dev, struct blob_reader *blob,
 
    blob_copy_bytes(blob, (void *)shader->entrypoint_name, entrypoint_length);
    blob_copy_bytes(blob, (void *)shader->msl_code, code_length);
-   blob_copy_bytes(blob, &shader->pipeline, sizeof(shader->pipeline));
+
+   if (info.stage == MESA_SHADER_VERTEX) {
+      const uint32_t frag_entrypoint_length = blob_read_uint32(blob);
+      const uint32_t frag_code_length = blob_read_uint32(blob);
+      shader->info.vs.frag_entrypoint_name =
+         ralloc_array(NULL, char, frag_entrypoint_length);
+      if (shader->info.vs.frag_entrypoint_name == NULL) {
+         kk_shader_destroy(&dev->vk, &shader->vk, pAllocator);
+         return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
+      }
+
+      shader->info.vs.frag_msl_code =
+         ralloc_array(NULL, char, frag_code_length);
+      if (shader->info.vs.frag_msl_code == NULL) {
+         kk_shader_destroy(&dev->vk, &shader->vk, pAllocator);
+         return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
+      }
+
+      blob_copy_bytes(blob, (void *)shader->info.vs.frag_entrypoint_name,
+                      frag_entrypoint_length);
+      blob_copy_bytes(blob, (void *)shader->info.vs.frag_msl_code,
+                      frag_code_length);
+   }
+
    if (blob->overrun) {
       kk_shader_destroy(&dev->vk, &shader->vk, pAllocator);
       return vk_error(dev, VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT);
    }
 
-   /* We are building a new shader so we need to retain resources */
+   VkResult result = VK_SUCCESS;
    if (info.stage == MESA_SHADER_COMPUTE)
-      mtl_retain(shader->pipeline.cs);
+      result = kk_compile_compute_pipeline(dev, shader);
    else if (info.stage == MESA_SHADER_VERTEX) {
-      mtl_retain(shader->pipeline.gfx.handle);
-      if (shader->pipeline.gfx.mtl_depth_stencil_state_handle)
-         mtl_retain(shader->pipeline.gfx.mtl_depth_stencil_state_handle);
+      result = kk_compile_graphics_pipeline(
+         dev, shader->msl_code, shader->entrypoint_name,
+         shader->info.vs.frag_msl_code, shader->info.vs.frag_entrypoint_name,
+         &shader->info, &shader->pipeline);
+   }
+
+   if (result != VK_SUCCESS) {
+      kk_shader_destroy(&dev->vk, &shader->vk, pAllocator);
+      return vk_error(dev, result);
    }
 
    *shader_out = &shader->vk;
@@ -1166,12 +1328,10 @@ kk_deserialize_shader(struct vk_device *vk_dev, struct blob_reader *blob,
    return VK_SUCCESS;
 }
 
-static void
+void
 kk_cmd_bind_compute_shader(struct kk_cmd_buffer *cmd, struct kk_shader *shader)
 {
-   cmd->state.cs.pipeline_state = shader->pipeline.cs;
-   cmd->state.cs.dirty |= KK_DIRTY_PIPELINE;
-   cmd->state.cs.local_size = shader->info.cs.local_size;
+   cmd->state.shaders[MESA_SHADER_COMPUTE] = shader;
 }
 
 static void
@@ -1179,16 +1339,14 @@ kk_cmd_bind_graphics_shader(struct kk_cmd_buffer *cmd,
                             const mesa_shader_stage stage,
                             struct kk_shader *shader)
 {
+   cmd->state.shaders[stage] = shader;
+   cmd->state.dirty_shaders |= BITFIELD_BIT(stage);
+
    /* Relevant pipeline data is only stored in vertex shaders */
    if (stage != MESA_SHADER_VERTEX)
       return;
 
-   cmd->state.gfx.primitive_type = shader->pipeline.gfx.primitive_type;
-   cmd->state.gfx.pipeline_state = shader->pipeline.gfx.handle;
-   cmd->state.gfx.vb.attribs_read = shader->info.vs.attribs_read;
-
-   bool requires_dynamic_depth_stencil =
-      shader->pipeline.gfx.mtl_depth_stencil_state_handle == NULL;
+   bool requires_dynamic_depth_stencil = shader->pipeline.gfx.ds_handle == NULL;
    if (cmd->state.gfx.is_depth_stencil_dynamic) {
       /* If we are switching from dynamic to static, we need to clean up
        * temporary state. Otherwise, leave the existing dynamic state
@@ -1196,15 +1354,14 @@ kk_cmd_bind_graphics_shader(struct kk_cmd_buffer *cmd,
        */
       if (!requires_dynamic_depth_stencil) {
          mtl_release(cmd->state.gfx.depth_stencil_state);
-         cmd->state.gfx.depth_stencil_state =
-            shader->pipeline.gfx.mtl_depth_stencil_state_handle;
+         cmd->state.gfx.depth_stencil_state = shader->pipeline.gfx.ds_handle;
       }
    } else
-      cmd->state.gfx.depth_stencil_state =
-         shader->pipeline.gfx.mtl_depth_stencil_state_handle;
+      cmd->state.gfx.depth_stencil_state = shader->pipeline.gfx.ds_handle;
    cmd->state.gfx.is_depth_stencil_dynamic = requires_dynamic_depth_stencil;
-   cmd->state.gfx.dirty |= KK_DIRTY_PIPELINE;
    cmd->state.gfx.dirty |= KK_DIRTY_VB;
+
+   cmd->state.gfx.sample_count = shader->info.vs.sample_count;
 }
 
 static void

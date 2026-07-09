@@ -37,14 +37,11 @@ struct exec_list;
 typedef struct nir_builder {
    nir_cursor cursor;
 
-   /* Whether new ALU instructions will be marked "exact" */
-   bool exact;
-
    /* Whether new ALU instruction will be constanst-folded if possible. */
    bool constant_fold_alu;
 
    /* Float_controls2 bits. See nir_alu_instr for details. */
-   uint32_t fp_fast_math;
+   uint32_t fp_math_ctrl;
 
    nir_shader *shader;
    nir_function_impl *impl;
@@ -55,7 +52,7 @@ nir_builder_create(nir_function_impl *impl)
 {
    nir_builder b;
    memset(&b, 0, sizeof(b));
-   b.exact = false;
+   b.fp_math_ctrl = nir_fp_fast_math;
    b.impl = impl;
    b.shader = impl->function->shader;
    return b;
@@ -724,13 +721,18 @@ nir_mov_alu(nir_builder *build, nir_alu_src src, unsigned num_components)
    nir_alu_instr *mov = nir_alu_instr_create(build->shader, nir_op_mov);
    nir_def_init(&mov->instr, &mov->def, num_components,
                 nir_src_bit_size(src.src));
-   mov->exact = build->exact;
-   mov->fp_fast_math = build->fp_fast_math;
+   assert(nir_op_infos[nir_op_mov].valid_fp_math_ctrl == 0);
    mov->src[0] = src;
    nir_builder_instr_insert(build, &mov->instr);
 
    return &mov->def;
 }
+
+/* Tries to avoid inserting a mov for the replacement,
+ * but if it has to insert one to handle non-alu, it's return instead of NULL.
+ */
+nir_def *
+nir_def_rewrite_uses_with_alu_src(nir_builder *build, nir_def *def, nir_alu_src src, unsigned num_components);
 
 /**
  * Construct a mov that reswizzles the source's components.
@@ -2161,17 +2163,18 @@ nir_tex_src_for_ssa(nir_tex_src_type src_type, nir_def *def)
 static inline nir_def *
 nir_build_deriv(nir_builder *b, nir_def *x, nir_intrinsic_op intrin)
 {
+   struct _nir_ddx_indices indices = { 0 };
    if (b->shader->options->scalarize_ddx && x->num_components > 1) {
       nir_def *res[NIR_MAX_VEC_COMPONENTS] = { NULL };
 
       for (unsigned i = 0; i < x->num_components; ++i) {
-         res[i] = _nir_build_ddx(b, x->bit_size, nir_channel(b, x, i));
+         res[i] = _nir_build_ddx(b, x->bit_size, nir_channel(b, x, i), indices);
          nir_def_as_intrinsic(res[i])->intrinsic = intrin;
       }
 
       return nir_vec(b, res, x->num_components);
    } else {
-      nir_def *res = _nir_build_ddx(b, x->bit_size, x);
+      nir_def *res = _nir_build_ddx(b, x->bit_size, x, indices);
       nir_def_as_intrinsic(res)->intrinsic = intrin;
       return res;
    }
@@ -2195,11 +2198,13 @@ struct nir_tex_builder {
    nir_def *coord, *ms_index, *lod, *bias, *comparator;
    unsigned texture_index, sampler_index;
    nir_def *texture_offset, *sampler_offset;
+   nir_def *texture_heap_offset, *sampler_heap_offset;
    nir_def *texture_handle, *sampler_handle;
    nir_deref_instr *texture_deref, *sampler_deref;
    enum glsl_sampler_dim dim;
    nir_alu_type dest_type;
    bool is_array;
+   bool is_sparse;
    bool can_speculate;
    uint32_t backend_flags;
 };
@@ -2213,19 +2218,11 @@ nir_def *nir_build_tex_struct(nir_builder *build, nir_texop op,
 #define nir_tex(build, coord_, ...)                                            \
    nir_build_tex(build, nir_texop_tex, .coord = coord_, __VA_ARGS__)
 
-#define nir_txl(build, coord_, lod_, ...)                                      \
-   nir_build_tex(build, nir_texop_txl, .coord = coord_, .lod = lod_,           \
-                 __VA_ARGS__)
-
-#define nir_txb(build, coord_, bias_, ...)                                     \
-   nir_build_tex(build, nir_texop_txb, .coord = coord_, .bias = bias,          \
-                 __VA_ARGS__)
-
 #define nir_txf(build, coord_, ...)                                            \
    nir_build_tex(build, nir_texop_txf, .coord = coord_, __VA_ARGS__)
 
-#define nir_txf_ms(build, coord_, ms_index_, ...)                              \
-   nir_build_tex(build, nir_texop_txf_ms, .coord = coord_,                     \
+#define nir_txf_ms(build, coord_, ms_index_, ...)       \
+   nir_build_tex(build, nir_texop_txf, .coord = coord_, \
                  .ms_index = ms_index_, __VA_ARGS__)
 
 #define nir_txs(build, ...) nir_build_tex(build, nir_texop_txs, __VA_ARGS__)
@@ -2349,6 +2346,9 @@ nir_inverse_ballot_imm(nir_builder *build, uint64_t imm, unsigned bit_size)
 {
    return nir_inverse_ballot(build, nir_imm_intN_t(build, imm, bit_size));
 }
+
+nir_def *
+nir_build_frag_coord(nir_builder *b, unsigned num_components);
 
 nir_def *
 nir_build_string(nir_builder *build, const char *value);

@@ -403,7 +403,6 @@ brw_inst::can_do_cmod(enum brw_conditional_mod cmod) const
    case BRW_OPCODE_LRP:
    case BRW_OPCODE_LZD:
    case BRW_OPCODE_MAC:
-   case BRW_OPCODE_MACH:
    case BRW_OPCODE_MAD:
    case BRW_OPCODE_MOV:
    case BRW_OPCODE_MUL:
@@ -563,7 +562,7 @@ brw_inst::size_read(const struct intel_device_info *devinfo, int arg) const
 
    case SHADER_OPCODE_LSC_FILL:
       if (arg == FILL_SRC_PAYLOAD1) {
-         return lsc_msg_addr_len(devinfo, LSC_ADDR_SIZE_A32,
+         return brw_lsc_msg_addr_len(devinfo, LSC_ADDR_SIZE_A32,
                                  as_scratch()->use_transpose ? 1 : exec_size) *
                 REG_SIZE;
       }
@@ -573,7 +572,7 @@ brw_inst::size_read(const struct intel_device_info *devinfo, int arg) const
       if (arg == SPILL_SRC_PAYLOAD1) {
          assert(!as_scratch()->use_transpose);
 
-         return lsc_msg_addr_len(devinfo, LSC_ADDR_SIZE_A32, exec_size) *
+         return brw_lsc_msg_addr_len(devinfo, LSC_ADDR_SIZE_A32, exec_size) *
                 REG_SIZE;
       } else if (arg == SPILL_SRC_PAYLOAD2) {
          return src[arg].component_size(exec_size);
@@ -986,24 +985,6 @@ brw_inst::has_side_effects() const
       return true;
    default:
       return eot;
-   }
-}
-
-bool
-brw_inst::is_volatile() const
-{
-   switch (opcode) {
-   case SHADER_OPCODE_MEMORY_LOAD_LOGICAL:
-   case SHADER_OPCODE_LOAD_REG:
-   case SHADER_OPCODE_LSC_FILL:
-      return true;
-   case SHADER_OPCODE_MEMORY_STORE_LOGICAL:
-      return as_mem()->flags & MEMORY_FLAG_VOLATILE_ACCESS;
-   case SHADER_OPCODE_SEND:
-   case SHADER_OPCODE_SEND_GATHER:
-      return as_send()->is_volatile;
-   default:
-      return false;
    }
 }
 

@@ -36,6 +36,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 #include "util/detect.h"
 
@@ -85,7 +86,8 @@ os_log_message(const char *message);
 
 
 /*
- * Get an option. Should return NULL if specified option is not set.
+ * Get an option(environment variable or os property) in a platform independent way.
+ * Should return NULL if specified option for @name is not set.
  * It has the same disadvantage as getenv, see
  * https://wiki.sei.cmu.edu/confluence/display/c/ENV34-C.+Do+not+store+pointers+returned+by+certain+functions
  */
@@ -103,7 +105,8 @@ char *
 os_get_option_dup(const char *name);
 
 /*
- * Get an option. Should return NULL if specified option is not set.
+ * Get an option(environment variable or os property) in a platform independent way.
+ * Should return NULL if specified option for @name is not set.
  * Same as `os_get_option()` but uses `secure_getenv()` instead of `getenv()`
  */
 const char *
@@ -120,15 +123,36 @@ char *
 os_get_option_secure_dup(const char *name);
 
 /*
- * Get an option. Should return NULL if specified option is not set.
+ * Get an option(environment variable or os property) in a platform independent way.
+ * Should return NULL if specified option for @name is not set.
  * It's will save the option into hash table for the first time, and
  * for latter calling, it's will return the value comes from hash table
  * directly, and the returned value will always be valid before program exit
- * The disadvantage is that setenv, unsetenv, putenv won't take effect
- * after this function is called
+ * The disadvantage is that os_set_option won't take effect after this
+ * function is called
  */
 const char *
 os_get_option_cached(const char *name);
+
+/*
+ * Set an option(environment variable or os property) in a platform independent way.
+ * If @overwrite is true:
+ *   On windows, equivalent to SetEnvironmentVariableA.
+ *   On non-windows, when @value is NULL, equivalent to unsetenv, otherwise setenv(override=1).
+ * If @overwrite is false:
+ *   When name already exist, do nothing, otherwise, equivalent to @overwrite is true
+ */
+void
+os_set_option(const char *name, const char *value, bool override);
+
+/**
+ * Unset an option through os_set_option
+ */
+static inline void
+os_unset_option(const char *name)
+{
+   os_set_option(name, NULL, true);
+}
 
 /*
  * Get the total amount of physical memory available on the system.

@@ -165,7 +165,7 @@ ALWAYS_INLINE static void
 resource_defer_image_barrier(struct zink_context *ctx, struct zink_resource *res, VkPipelineStageFlags pipeline)
 {
    assert(!res->obj->is_buffer);
-   assert(!ctx->blitting);
+   assert(!ctx->blitting || res->base.b.bind & ZINK_BIND_TRANSIENT);
 
    bool is_compute = pipeline == VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
    /* if this is a non-shader barrier and there are binds, always queue a shader barrier */
@@ -461,7 +461,7 @@ zink_resource_image_barrier(struct zink_context *ctx, struct zink_resource *res,
          cdt->swapchain->images[res->obj->dt_idx].layout = res->layout;
       }
    }
-   if (res->obj->exportable && queue_import) {
+   if (res->obj->exportable_dmabuf && queue_import) {
       simple_mtx_lock(&ctx->bs->exportable_lock);
       for (struct zink_resource *r = res; r; r = zink_resource(r->base.b.next)) {
          VkSemaphore sem = zink_screen_export_dmabuf_semaphore(zink_screen(ctx->base.screen), r);

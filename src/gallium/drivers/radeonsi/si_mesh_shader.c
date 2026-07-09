@@ -6,9 +6,7 @@
 
 #include "si_pipe.h"
 #include "si_build_pm4.h"
-#include "si_shader_internal.h"
 #include "si_query.h"
-#include "nir.h"
 #include "util/u_upload_mgr.h"
 
 #define SI_MESH_PIPELINE_STATE_DIRTY_MASK \
@@ -140,8 +138,8 @@ static void si_emit_draw_mesh_tasks_ace_packets(struct si_context *sctx,
 {
    struct radeon_cmdbuf *cs = sctx->gfx_cs.gang_cs;
    struct si_shader *shader = &sctx->ts_shader_state.program->shader;
-   bool uses_draw_id = shader->info.uses_draw_id;
-   bool uses_grid_size = shader->selector->info.uses_grid_size;
+   bool uses_draw_id = shader->info.uses_sysval_draw_id;
+   bool uses_grid_size = shader->info.uses_sysval_num_workgroups;
    unsigned sh_base_reg = R_00B900_COMPUTE_USER_DATA_0;
 
    unsigned reg = sh_base_reg + 4 * GFX10_SGPR_TS_TASK_RING_ENTRY;
@@ -245,7 +243,7 @@ static void clear_reg_saved_mask(struct si_context *sctx, unsigned reg)
 {
    if (reg >= SI_SGPR_BASE_VERTEX && reg <= SI_SGPR_START_INSTANCE) {
       BITSET_CLEAR(sctx->tracked_regs.reg_saved_mask,
-                   SI_TRACKED_SPI_SHADER_USER_DATA_ES__BASE_VERTEX +
+                   AC_TRACKED_SPI_SHADER_USER_DATA_ES__BASE_VERTEX +
                    (reg - SI_SGPR_BASE_VERTEX));
    }
 }
@@ -254,7 +252,7 @@ static void clear_reg_saved_mask(struct si_context *sctx, unsigned reg)
    do { \
       unsigned addr = sh_base_reg + (reg) * 4; \
       if ((reg) >= SI_SGPR_BASE_VERTEX && (reg) <= SI_SGPR_START_INSTANCE) { \
-         unsigned tracked_reg = SI_TRACKED_SPI_SHADER_USER_DATA_ES__BASE_VERTEX; \
+         unsigned tracked_reg = AC_TRACKED_SPI_SHADER_USER_DATA_ES__BASE_VERTEX; \
          tracked_reg += (reg) - SI_SGPR_BASE_VERTEX; \
          if (sctx->gfx_level >= GFX12) \
             gfx12_opt_push_gfx_sh_reg(addr, tracked_reg, value); \
@@ -279,7 +277,7 @@ static void si_emit_draw_mesh_tasks_gfx_packets(struct si_context *sctx,
    unsigned sh_base_reg = sctx->shader_pointers.sh_base[MESA_SHADER_MESH];
    struct si_shader *shader = sctx->ms_shader_state.current;
    struct si_shader_selector *sel = shader->selector;
-   bool uses_grid_size = sel->info.uses_grid_size;
+   bool uses_grid_size = shader->info.uses_sysval_num_workgroups;
 
    int offset = GFX11_SGPR_MS_ATTRIBUTE_RING_ADDR;
    if (sctx->gfx_level >= GFX11)
@@ -292,7 +290,7 @@ static void si_emit_draw_mesh_tasks_gfx_packets(struct si_context *sctx,
       offset++;
    }
    /* mesh shader after task shader should not use gl_DrawID */
-   assert(!shader->info.uses_draw_id);
+   assert(!shader->info.uses_sysval_draw_id);
    unsigned grid_size_reg = 0;
    if (uses_grid_size || sctx->gfx_level < GFX11) {
       grid_size_reg = offset;
@@ -334,7 +332,7 @@ static void si_emit_draw_mesh_tasks_gfx_packets(struct si_context *sctx,
    radeon_emit(S_4D0_RING_ENTRY_REG(ring_entry_loc) | S_4D0_XYZ_DIM_REG(grid_size_loc));
    if (sctx->gfx_level >= GFX11)
       radeon_emit(S_4D1_XYZ_DIM_ENABLE(uses_grid_size) |
-                  S_4D1_MODE1_ENABLE(!sctx->screen->info.mesh_fast_launch_2) |
+                  S_4D1_MODE1_ENABLE((sctx->screen->info.gfx_level < GFX11)) |
                   S_4D1_LINEAR_DISPATCH_ENABLE(linear_taskmesh_dispatch));
    else
       radeon_emit(0);
@@ -353,8 +351,8 @@ static void si_emit_draw_mesh_shader_only_packets(struct si_context *sctx,
    struct radeon_cmdbuf *cs = &sctx->gfx_cs;
    struct si_shader *shader = sctx->ms_shader_state.current;
    struct si_shader_selector *sel = shader->selector;
-   bool uses_draw_id = shader->info.uses_draw_id;
-   bool uses_grid_size = sel->info.uses_grid_size;
+   bool uses_draw_id = shader->info.uses_sysval_draw_id;
+   bool uses_grid_size = shader->info.uses_sysval_num_workgroups;
    unsigned sh_base_reg = sctx->shader_pointers.sh_base[MESA_SHADER_MESH];
 
    int offset = GFX11_SGPR_MS_ATTRIBUTE_RING_ADDR;
@@ -422,7 +420,7 @@ static void si_emit_draw_mesh_shader_only_packets(struct si_context *sctx,
          radeon_emit(S_4C2_DRAW_INDEX_ENABLE(uses_draw_id) |
                      S_4C2_COUNT_INDIRECT_ENABLE(!!count_va) |
                      S_4C2_XYZ_DIM_ENABLE(uses_grid_size) |
-                     S_4C2_MODE1_ENABLE(!sctx->screen->info.mesh_fast_launch_2));
+                     S_4C2_MODE1_ENABLE((sctx->screen->info.gfx_level < GFX11)));
       else
          radeon_emit(S_4C2_DRAW_INDEX_ENABLE(uses_draw_id) |
                      S_4C2_COUNT_INDIRECT_ENABLE(!!count_va));
@@ -444,7 +442,7 @@ static void si_emit_draw_mesh_shader_only_packets(struct si_context *sctx,
       si_emit_buffered_gfx_sh_regs_for_mesh(sctx);
       radeon_begin_again(cs);
 
-      if (sctx->screen->info.mesh_fast_launch_2) {
+      if (sctx->screen->info.gfx_level >= GFX11) {
          radeon_emit(PKT3(PKT3_DISPATCH_MESH_DIRECT, 3, sctx->render_cond_enabled));
          radeon_emit(info->grid[0]);
          radeon_emit(info->grid[1]);
@@ -772,8 +770,7 @@ static void handle_indirect_resource(struct si_context *sctx, struct si_resource
 
    /* Indirect buffers are read through L2 on GFX9-GFX11, but not other hw. */
    if (sscreen->info.cp_sdma_ge_use_system_memory_scope && res->L2_cache_dirty) {
-      sctx->barrier_flags |= SI_BARRIER_WB_L2 | SI_BARRIER_PFP_SYNC_ME;
-      si_mark_atom_dirty(sctx, &sctx->atoms.s.barrier);
+      si_set_barrier_flags(sctx, SI_BARRIER_WB_L2 | SI_BARRIER_PFP_SYNC_ME);
       res->L2_cache_dirty = false;
    }
 
@@ -786,7 +783,7 @@ static void si_emit_task_wait_packets(struct si_context *sctx)
    if (sctx->task_wait_count == sctx->last_task_wait_count)
       return;
 
-   si_cp_write_data(sctx, sctx->task_wait_buf, 0, 4, V_370_MEM, V_370_ME,
+   si_cp_write_data(sctx, sctx->task_wait_buf, 0, 4, V_371_MEMORY, V_371_MICRO_ENGINE,
                     &sctx->task_wait_count);
 
    si_cp_wait_mem(sctx, sctx->gfx_cs.gang_cs, sctx->task_wait_buf->gpu_address,
@@ -847,7 +844,7 @@ static void si_draw_mesh_tasks(struct pipe_context *ctx,
       si_emit_task_shader_pointers(sctx);
    }
 
-   enum mesa_prim prim = sctx->ms_shader_state.cso->rast_prim;
+   enum mesa_prim prim = sctx->ms_shader_state.cso->info.rast_prim;
    si_set_rasterized_prim(sctx, prim, sctx->ms_shader_state.current, true);
 
    if (sctx->dirty_shaders_mask & SI_MESH_PIPELINE_STATE_DIRTY_MASK)
@@ -866,12 +863,33 @@ static void si_draw_mesh_tasks(struct pipe_context *ctx,
    if (sctx->bo_list_add_all_mesh_resources)
       si_mesh_resources_add_all_to_bo_list(sctx);
 
+   if (unlikely(sctx->sqtt_enabled)) {
+      enum rgp_sqtt_marker_event_type event;
+      if (info->indirect) {
+         if (info->indirect_draw_count) {
+            event = EventCmdDrawMeshTasksIndirectCountEXT;
+         } else {
+            event = EventCmdDrawMeshTasksIndirectEXT;
+         }
+      } else {
+         event = EventCmdDrawMeshTasksEXT;
+      }
+      si_sqtt_write_event_marker(sctx, &sctx->gfx_cs, event,
+                                 UINT_MAX, UINT_MAX, UINT_MAX);
+   }
+
    if (sctx->ts_shader_state.program) {
       si_emit_task_wait_packets(sctx);
       si_emit_draw_mesh_tasks_ace_packets(sctx, info, prefetch_task_shader);
       si_emit_draw_mesh_tasks_gfx_packets(sctx, info);
    } else {
       si_emit_draw_mesh_shader_only_packets(sctx, info);
+   }
+
+   if (unlikely(sctx->sqtt_enabled)) {
+      radeon_begin(&sctx->gfx_cs);
+      radeon_event_write(V_028A90_THREAD_TRACE_MARKER);
+      radeon_end();
    }
 
    si_prefetch_mesh_shaders(sctx);

@@ -43,6 +43,7 @@
 #include "pipe/p_state.h"
 #include "cso_cache/cso_context.h"
 #include "nir.h"
+#include "nir/nir_lower_blend.h"
 
 #ifdef HAVE_LIBDRM
 #include <drm-uapi/drm.h>
@@ -105,8 +106,7 @@ extern "C" {
 #define MAX_PER_STAGE_DESCRIPTOR_UNIFORM_BLOCKS 8
 #define MAX_DGC_STREAMS 16
 #define MAX_DGC_TOKENS 16
-/* Currently lavapipe does not support more than 1 image plane */
-#define LVP_MAX_PLANE_COUNT 1
+#define LVP_MAX_PLANE_COUNT 3
 
 #define LVP_MAX_TLAS_DEPTH 24
 #define LVP_MAX_BLAS_DEPTH 29
@@ -167,8 +167,6 @@ struct lvp_physical_device {
 
 struct lvp_instance {
    struct vk_instance vk;
-
-   uint32_t apiVersion;
 
    uint64_t debug_flags;
 
@@ -280,15 +278,12 @@ vk_sync_as_lvp_pipe_sync(struct vk_sync *sync)
 
 struct lvp_image_plane {
    struct pipe_resource *bo;
-   struct pipe_memory_allocation *pmem;
-   VkDeviceSize plane_offset;
-   VkDeviceSize memory_offset;
+   VkDeviceSize offset;
    VkDeviceSize size;
 };
 
 struct lvp_image {
    struct vk_image vk;
-   VkDeviceSize offset;
    VkDeviceSize size;
    uint32_t alignment;
    bool disjoint;
@@ -333,7 +328,8 @@ struct lvp_descriptor_set_binding_layout {
    uint32_t uniform_block_size;
 
    /* Immutable samplers (or NULL if no immutable samplers) */
-   struct lvp_sampler **immutable_samplers;
+   struct lp_descriptor *immutable_samplers;
+   struct vk_ycbcr_conversion_state *immutable_ycbcr;
 };
 
 struct lvp_descriptor_set_layout {
@@ -541,6 +537,8 @@ struct lvp_pipeline {
       uint32_t group_count;
    } rt;
 
+   uint8_t advanced_blend_rts;
+
    unsigned num_groups;
    unsigned num_groups_total;
    VkPipeline groups[0];
@@ -579,10 +577,8 @@ struct lvp_event {
 struct lvp_buffer {
    struct vk_buffer vk;
 
-   struct lvp_device_memory *mem;
    struct pipe_resource *bo;
    uint64_t total_size;
-   uint64_t offset;
    void *map;
    struct pipe_transfer *transfer;
 };
@@ -605,7 +601,6 @@ struct lvp_buffer_view {
 struct lvp_query_pool {
    struct vk_query_pool vk;
    enum pipe_query_type base_type;
-   void *data; /* Used by queries that are not implemented by pipe_query */
    struct pipe_query *queries[0];
 };
 
@@ -757,6 +752,9 @@ lvp_vk_format_to_pipe_format(VkFormat format)
 }
 
 void
+lvp_nir_lower_blend(nir_shader *nir, const nir_lower_blend_options *opts);
+
+void
 lvp_sampler_init(struct lvp_device *device, struct lp_descriptor *desc, const VkSamplerCreateInfo *pCreateInfo, const struct vk_sampler *sampler);
 
 static inline uint8_t
@@ -804,9 +802,19 @@ lvp_shader_compile(struct lvp_device *device, struct lvp_shader *shader, nir_sha
 enum vk_cmd_type
 lvp_nv_dgc_token_to_cmd_type(const VkIndirectCommandsLayoutTokenNV *token);
 
+VkResult
+lvp_image_init(struct lvp_device *device, struct lvp_image *image,
+               const VkImageCreateInfo *pCreateInfo);
+
 #if DETECT_OS_ANDROID
 VkResult
-lvp_import_ahb_memory(struct lvp_device *device, struct lvp_device_memory *mem);
+lvp_import_ahb_memory(struct lvp_device *device,
+                      const VkMemoryAllocateInfo *alloc_info,
+                      struct lvp_device_memory *mem);
+
+VkResult
+lvp_bind_anb_memory(struct lvp_device *device,
+                    const VkBindImageMemoryInfo *bind_info);
 #endif
 
 enum vk_cmd_type
@@ -815,12 +823,14 @@ size_t
 lvp_ext_dgc_token_size(const struct lvp_indirect_command_layout_ext *elayout, const VkIndirectCommandsLayoutTokenEXT *token);
 
 struct lvp_cmd_write_buffer_cp {
+   struct vk_cmd_queue_entry_base base;
    VkDeviceAddress addr;
    void *data;
    uint32_t size;
 };
 
 struct lvp_cmd_fill_buffer_addr {
+   struct vk_cmd_queue_entry_base base;
    VkDeviceAddress addr;
    VkDeviceSize size;
    uint32_t data;
@@ -832,6 +842,7 @@ lvp_encode_as(struct vk_acceleration_structure *dst, VkDeviceAddress intermediat
               VkGeometryTypeKHR geometry_type);
 
 struct lvp_cmd_encode_as {
+   struct vk_cmd_queue_entry_base base;
    struct vk_acceleration_structure *dst;
    VkDeviceAddress intermediate_as_addr;
    VkDeviceAddress intermediate_header_addr;

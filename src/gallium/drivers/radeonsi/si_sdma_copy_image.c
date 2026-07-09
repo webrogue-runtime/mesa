@@ -5,10 +5,8 @@
  * SPDX-License-Identifier: MIT
  */
 
-#include "si_build_pm4.h"
-#include "sid.h"
+#include "si_pipe.h"
 #include "util/u_memory.h"
-#include "ac_formats.h"
 #include "ac_cmdbuf_sdma.h"
 
 static
@@ -113,8 +111,11 @@ static bool si_sdma_v4_v5_copy_texture(struct si_context *sctx, struct si_textur
       const uint64_t md_address = dcc ? tiled_address + tiled->surface.meta_offset : 0;
       const bool detile = linear == sdst;
 
-      const struct ac_sdma_surf_linear surf_linear = {
+      const struct ac_sdma_surf surf_linear = {
+         .surf = &linear->surface,
          .va = linear_address,
+         .format = linear->buffer.b.b.format,
+         .bpp = bpp,
          .offset =
             {
                .x = 0,
@@ -125,7 +126,7 @@ static bool si_sdma_v4_v5_copy_texture(struct si_context *sctx, struct si_textur
          .slice_pitch = linear_slice_pitch,
       };
 
-      const struct ac_sdma_surf_tiled surf_tiled = {
+      const struct ac_sdma_surf surf_tiled = {
          .surf = &tiled->surface,
          .va = tiled_address | (tiled->surface.tile_swizzle << 8),
          .format = tiled->buffer.b.b.format,
@@ -136,6 +137,7 @@ static bool si_sdma_v4_v5_copy_texture(struct si_context *sctx, struct si_textur
                .y = 0,
                .z = 0,
             },
+         .is_compressed = dcc,
          .extent = {
             .width = tiled_width,
             .height = tiled_height,
@@ -143,7 +145,6 @@ static bool si_sdma_v4_v5_copy_texture(struct si_context *sctx, struct si_textur
          },
          .first_level = 0,
          .num_levels = tiled->buffer.b.b.last_level + 1,
-         .is_compressed = dcc,
          .surf_type = 0,
          .meta_va = md_address,
          .htile_enabled = false,
@@ -203,8 +204,11 @@ bool cik_sdma_copy_texture(struct si_context *sctx, struct si_texture *sdst, str
         (copy_width != (1 << 14) && copy_height != (1 << 14)))) {
       struct radeon_cmdbuf *cs = sctx->sdma_cs;
 
-      const struct ac_sdma_surf_linear surf_src = {
+      const struct ac_sdma_surf surf_src = {
+         .surf = &ssrc->surface,
          .va = src_address,
+         .format = ssrc->buffer.b.b.format,
+         .bpp = bpp,
          .offset =
             {
                .x = 0,
@@ -216,8 +220,11 @@ bool cik_sdma_copy_texture(struct si_context *sctx, struct si_texture *sdst, str
          .slice_pitch = src_slice_pitch,
       };
 
-      const struct ac_sdma_surf_linear surf_dst = {
+      const struct ac_sdma_surf surf_dst = {
+         .surf = &sdst->surface,
          .va = dst_address,
+         .format = sdst->buffer.b.b.format,
+         .bpp = bpp,
          .offset =
             {
                .x = 0,
@@ -333,8 +340,11 @@ bool cik_sdma_copy_texture(struct si_context *sctx, struct si_texture *sdst, str
          struct radeon_cmdbuf *cs = sctx->sdma_cs;
          const bool detile = linear == sdst;
 
-         const struct ac_sdma_surf_linear surf_linear = {
+         const struct ac_sdma_surf surf_linear = {
+            .surf = &linear->surface,
             .va = linear_address,
+            .format = linear->buffer.b.b.format,
+            .bpp = bpp,
             .offset =
                {
                   .x = 0,
@@ -345,8 +355,9 @@ bool cik_sdma_copy_texture(struct si_context *sctx, struct si_texture *sdst, str
             .slice_pitch = linear_slice_pitch,
          };
 
-         const struct ac_sdma_surf_tiled surf_tiled = {
+         const struct ac_sdma_surf surf_tiled = {
             .surf = &tiled->surface,
+            .format = tiled->buffer.b.b.format,
             .va = tiled_address,
             .bpp = bpp,
             .offset =
@@ -355,6 +366,7 @@ bool cik_sdma_copy_texture(struct si_context *sctx, struct si_texture *sdst, str
                   .y = 0,
                   .z = 0,
                },
+            .is_compressed = false,
             .extent =
                {
                   .width = pitch_tile_max + 1,
@@ -363,7 +375,6 @@ bool cik_sdma_copy_texture(struct si_context *sctx, struct si_texture *sdst, str
                },
             .first_level = 0,
             .num_levels = 1,
-            .is_compressed = false,
             .htile_enabled = false,
          };
 
@@ -421,6 +432,7 @@ bool si_sdma_copy_image(struct si_context *sctx, struct si_texture *dst, struct 
       case GFX10_3:
       case GFX11:
       case GFX11_5:
+      case GFX11_7:
       case GFX12:
          if (!si_sdma_v4_v5_copy_texture(sctx, dst, src))
             return false;

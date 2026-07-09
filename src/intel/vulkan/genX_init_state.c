@@ -285,10 +285,12 @@ init_common_queue_state(struct anv_queue *queue, struct anv_batch *batch)
       sba.IndirectObjectBufferSizeModifyEnable = true;
 
       sba.InstructionBaseAddress =
-         (struct anv_address) { .offset =
-         device->physical->va.instruction_state_pool.addr,
-      };
-      sba.InstructionBufferSize = device->physical->va.instruction_state_pool.size / 4096;
+         (struct anv_address) {
+            .offset = device->physical->va.shader_heap.addr,
+         };
+      sba.InstructionBufferSize =
+         device->physical->va.shader_heap.size / 4096;
+
       sba.InstructionMOCS = mocs;
       sba.InstructionBaseAddressModifyEnable = true;
       sba.InstructionBuffersizeModifyEnable = true;
@@ -351,12 +353,17 @@ init_common_queue_state(struct anv_queue *queue, struct anv_batch *batch)
 #if GFX_VERx10 >= 125
    if (ANV_SUPPORT_RT && device->info->has_ray_tracing) {
       anv_batch_emit(batch, GENX(3DSTATE_BTD), btd) {
-         /* TODO: This is the timeout after which the bucketed thread
-          *       dispatcher will kick off a wave of threads. We go with the
-          *       lowest value for now. It could be tweaked on a per
-          *       application basis (drirc).
-          */
-         btd.DispatchTimeoutCounter = _64clocks;
+         uint32_t dispatch_timeout_counter =
+            device->physical->instance->dispatch_timeout_counter;
+         uint32_t clamped_timeout_counter =
+            genX(anv_get_btd_dispatch_timeout_counter)(dispatch_timeout_counter);
+#if GFX_VERx10 >= 200
+         btd.DispatchTimeoutCounter = clamped_timeout_counter;
+#else
+         btd.DispatchTimeoutCounter = clamped_timeout_counter & 0x3;
+         btd.DispatchTimeoutCounterExtend = (clamped_timeout_counter >> 2) & 0x3;
+#endif
+
          /* BSpec 43851: "This field must be programmed to 6h i.e. memory
           *               backed buffer must be 128KB."
           */
@@ -409,7 +416,7 @@ init_render_queue_state(struct anv_queue *queue, bool is_companion_rcs_batch)
 
    struct anv_batch *batch = &submit->batch;
 
-   genX(emit_pipeline_select)(batch, _3D, device);
+   genX(emit_pipeline_select)(batch, _3D, device, false);
 
 #if GFX_VER == 9
    anv_batch_write_reg(batch, GENX(CACHE_MODE_1), cm1) {
@@ -626,6 +633,38 @@ init_render_queue_state(struct anv_queue *queue, bool is_companion_rcs_batch)
    }
 #endif
 
+#if GFX_VERx10 >= 300
+   /* Set value explicitly on init to override possible wrong setting. This bit
+    * default changed from Xe2 to Xe3 and is required to be zero for
+    * Wa_16020518922 as mentioned in bspec 55893.
+    */
+   anv_batch_write_reg(batch, GENX(CHICKEN_RASTER_2), reg) {
+      reg.DisableAnyMCTRresponsefix = false;
+      reg.DisableAnyMCTRresponsefixMask = true;
+   }
+#endif
+
+
+   /* Force push constant gather at 3DSTATE_CONSTANT* command parsing, not
+    * when emitting 3DSTATE_BINDING_TABLE_POINTER* commands.
+    *
+    * 3DSTATE_BINDING_TABLE_POINTERS_* have to be programmed prior.
+    *
+    * Do it on all platforms for safety.
+    */
+   anv_batch_emit(batch, GENX(3DSTATE_BINDING_TABLE_POINTERS_VS), _);
+   anv_batch_emit(batch, GENX(3DSTATE_BINDING_TABLE_POINTERS_HS), _);
+   anv_batch_emit(batch, GENX(3DSTATE_BINDING_TABLE_POINTERS_DS), _);
+   anv_batch_emit(batch, GENX(3DSTATE_BINDING_TABLE_POINTERS_GS), _);
+   anv_batch_emit(batch, GENX(3DSTATE_BINDING_TABLE_POINTERS_PS), _);
+
+#if GFX_VER == 9
+   anv_batch_write_reg(batch, GENX(COMMON_SLICE_CHICKEN2), csc2) {
+      csc2.DisableGatheratSetShaderCommonSlice = true;
+      csc2.DisableGatheratSetShaderCommonSliceMask = true;
+   }
+#endif
+
    /* Set the "CONSTANT_BUFFER Address Offset Disable" bit, so
     * 3DSTATE_CONSTANT_XS buffer 0 is an absolute address.
     *
@@ -635,6 +674,10 @@ init_render_queue_state(struct anv_queue *queue, bool is_companion_rcs_batch)
    anv_batch_write_reg(batch, GENX(CS_DEBUG_MODE2), csdm2) {
       csdm2.CONSTANT_BUFFERAddressOffsetDisable = true;
       csdm2.CONSTANT_BUFFERAddressOffsetDisableMask = true;
+#if GFX_VER == 9
+      csdm2.DisableGatheratSetShader = true;
+      csdm2.DisableGatheratSetShaderMask = true;
+#endif
    }
 
    init_common_queue_state(queue, batch);
@@ -664,6 +707,7 @@ init_render_queue_state(struct anv_queue *queue, bool is_companion_rcs_batch)
       cm.Mask1 = 0xffff;
 #if GFX_VERx10 >= 200
       cm.Mask2 = 0xffff;
+      cm.UAVCoherencyMode = FlushDataportL1;
 #endif
    }
    anv_batch_emit(batch, GENX(3DSTATE_MESH_CONTROL), zero);
@@ -679,7 +723,7 @@ init_render_queue_state(struct anv_queue *queue, bool is_companion_rcs_batch)
                                       ANV_PIPE_FLUSH_BITS | ANV_PIPE_INVALIDATE_BITS);
 #endif
 
-   genX(emit_pipeline_select)(batch, GPGPU, device);
+   genX(emit_pipeline_select)(batch, GPGPU, device, false);
    anv_batch_emit(batch, GENX(CFE_STATE), cfe) {
       cfe.MaximumNumberofThreads =
          devinfo->max_cs_threads * devinfo->subslice_total;
@@ -695,17 +739,47 @@ init_render_queue_state(struct anv_queue *queue, bool is_companion_rcs_batch)
                                       ANV_PIPE_FLUSH_BITS | ANV_PIPE_INVALIDATE_BITS);
 #endif
 
-   genX(emit_pipeline_select)(batch, _3D, device);
+   genX(emit_pipeline_select)(batch, _3D, device, false);
 #endif
 
-#if GFX_VER >= 20
+#if GFX_VER >= 11
+   if (device->info->kmd_type == INTEL_KMD_TYPE_I915 &&
+       !device->physical->rt_change_needs_flush) {
+      /* Bspec Register_ChickenbitforCommonSliceRegister3 section:
+       *
+       *    "If this bit is enabled, RCC uses BTP+BTI as address tag in its
+       *    state cache instead of BTI only."
+       *
+       * This helps to drop RT flush and PS Scoreboard stall due to new
+       * association of BTI.
+       *
+       * Only program the register on i915, Xe doesn't put the register on the
+       * allow list, instead we have a context/queue creation flag.
+       */
+      anv_batch_write_reg(batch, GENX(COMMON_SLICE_CHICKEN3), c3) {
+         c3.StateCachePerfFixDisabled = true;
+         c3.StateCachePerfFixDisabledMask = true;
+      }
+   }
+#endif
+
+#if GFX_VERx10 >= 125
    anv_batch_emit(batch, GENX(3DSTATE_3D_MODE), p) {
-      p.DX10OGLBorderModeforYCRCB = true;
-      p.DX10OGLBorderModeforYCRCBMask = true;
+      if (device->info->verx10 > 125 ||
+          intel_device_info_is_mtl_or_arl(device->info)) {
+         p.DX10OGLBorderModeforYCRCB = true;
+         p.DX10OGLBorderModeforYCRCBMask = true;
+      }
 #if INTEL_NEEDS_WA_14019857787
       p.EnableOOOreadsinRCPB = true;
       p.EnableOOOreadsinRCPBMask = true;
 #endif
+      /* Disable RHWO optimization by default and turn it on only for MSAA draws
+       * later unless Wa_14024015672 drirc is set.
+       */
+      p.RCCRHWOOptimizationDisable =
+         intel_needs_workaround(device->info, 14024015672);
+      p.RCCRHWOOptimizationDisableMask = true;
    }
 #endif
 
@@ -745,7 +819,7 @@ init_compute_queue_state(struct anv_queue *queue)
 
    struct anv_batch *batch = &submit->batch;
 
-   genX(emit_pipeline_select)(batch, GPGPU, queue->device);
+   genX(emit_pipeline_select)(batch, GPGPU, queue->device, false);
 
 #if GFX_VER == 12
    if (queue->device->info->has_aux_map) {
@@ -806,6 +880,8 @@ init_compute_queue_state(struct anv_queue *queue)
       cm.AsyncComputeThreadLimitMask = 0x7;
       cm.ZPassAsyncComputeThreadLimitMask = 0x7;
       cm.ZAsyncThrottlesettingsMask = 0x3;
+      cm.Mask2 = 0xffff;
+      cm.UAVCoherencyMode = FlushDataportL1;
 #else
       cm.PixelAsyncComputeThreadLimit = PACTL_Max24;
       cm.ZPassAsyncComputeThreadLimit = ZPACTL_Max60;
@@ -1251,30 +1327,16 @@ static const uint32_t vk_to_intel_sampler_reduction_mode[] = {
    [VK_SAMPLER_REDUCTION_MODE_MAX]              = MAXIMUM,
 };
 
-VkResult genX(CreateSampler)(
-    VkDevice                                    _device,
-    const VkSamplerCreateInfo*                  pCreateInfo,
-    const VkAllocationCallbacks*                pAllocator,
-    VkSampler*                                  pSampler)
+static VkResult
+border_color_load(struct anv_device *device,
+                  struct anv_sampler *sampler,
+                  const VkSamplerCreateInfo* pCreateInfo,
+                  uint32_t *ret_border_color_offset)
 {
-   ANV_FROM_HANDLE(anv_device, device, _device);
-   struct anv_sampler *sampler;
-
-   sampler = vk_sampler_create(&device->vk, pCreateInfo,
-                               pAllocator, sizeof(*sampler));
-   if (!sampler)
-      return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
-
-   const struct vk_format_ycbcr_info *ycbcr_info =
-      sampler->vk.format != VK_FORMAT_UNDEFINED ?
-      vk_format_get_ycbcr_info(sampler->vk.format) : NULL;
-   assert((ycbcr_info == NULL) == (sampler->vk.ycbcr_conversion == NULL));
-
-   sampler->n_planes = ycbcr_info ? ycbcr_info->n_planes : 1;
-
    uint32_t border_color_stride = 64;
    uint32_t border_color_offset;
    void *border_color_ptr;
+
    if (sampler->vk.border_color <= VK_BORDER_COLOR_INT_OPAQUE_WHITE) {
       border_color_offset = device->border_colors.offset +
                             pCreateInfo->borderColor *
@@ -1326,6 +1388,36 @@ VkResult genX(CreateSampler)(
 
       memcpy(border_color_ptr, color.u32, sizeof(color));
    }
+
+   *ret_border_color_offset = border_color_offset;
+   return VK_SUCCESS;
+}
+
+VkResult genX(CreateSampler)(
+    VkDevice                                    _device,
+    const VkSamplerCreateInfo*                  pCreateInfo,
+    const VkAllocationCallbacks*                pAllocator,
+    VkSampler*                                  pSampler)
+{
+   ANV_FROM_HANDLE(anv_device, device, _device);
+   struct anv_sampler *sampler;
+
+   sampler = vk_sampler_create(&device->vk, pCreateInfo,
+                               pAllocator, sizeof(*sampler));
+   if (!sampler)
+      return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
+
+   const struct vk_format_ycbcr_info *ycbcr_info =
+      sampler->vk.format != VK_FORMAT_UNDEFINED ?
+      vk_format_get_ycbcr_info(sampler->vk.format) : NULL;
+   assert((ycbcr_info == NULL) == (sampler->vk.ycbcr_conversion == NULL));
+
+   sampler->n_planes = ycbcr_info ? ycbcr_info->n_planes : 1;
+
+   uint32_t border_color_offset = 0;
+   VkResult result = border_color_load(device, sampler, pCreateInfo, &border_color_offset);
+   if (result != VK_SUCCESS)
+      return result;
 
    const bool seamless_cube =
       !(pCreateInfo->flags & VK_SAMPLER_CREATE_NON_SEAMLESS_CUBE_MAP_BIT_EXT);

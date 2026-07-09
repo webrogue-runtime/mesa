@@ -1,5 +1,3 @@
-test_fence_pending_signal_cpu_rewind_plain,Crash
-
 # The tests assumes a dubgroup size >= 16
 test_shader_waveop_maximal_convergence,Fail
 
@@ -19,3 +17,8 @@ test_undefined_structured_raw_alias_dxbc,Fail
 test_undefined_structured_raw_alias_dxil,Fail
 test_undefined_structured_raw_read_typed_dxbc,Fail
 test_undefined_structured_raw_read_typed_dxil,Fail
+
+test_copy_subresource_depth_stencil_batch,Fail
+test_uav_clear_exhaustive_descriptors,Crash
+
+test_raytracing_huge_dispatch,Fail

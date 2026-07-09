@@ -108,7 +108,7 @@ hash_alu_src(uint32_t hash, const nir_alu_src *src, unsigned num_components)
 static uint32_t
 hash_alu(uint32_t hash, const nir_alu_instr *instr)
 {
-   /* We explicitly don't hash instr->exact. */
+   /* We explicitly don't hash instr->fp_math_ctrl. */
    uint8_t flags = instr->no_signed_wrap |
                    instr->no_unsigned_wrap << 1;
    uint8_t v[8];
@@ -242,7 +242,7 @@ hash_intrinsic(uint32_t hash, const nir_intrinsic_instr *instr)
       hash = XXH32(v, sizeof(v), hash);
    }
 
-   hash = XXH32(instr->const_index, info->num_indices * sizeof(instr->const_index[0]), hash);
+   hash = XXH32(instr->const_index, info->num_index_slots * sizeof(instr->const_index[0]), hash);
 
    for (unsigned i = 0; i < nir_intrinsic_infos[instr->intrinsic].num_srcs; i++)
       hash = hash_src(hash, &instr->src[i]);
@@ -264,7 +264,7 @@ pack_tex(const nir_tex_instr *instr)
    bit += bits; \
 } while (0)
 
-   PACK(instr->op, 5);
+   PACK(instr->op, 6);
    PACK(instr->num_srcs, 5);
    PACK(instr->sampler_dim, 4);
    PACK(instr->coord_components, 3);
@@ -278,6 +278,7 @@ pack_tex(const nir_tex_instr *instr)
    PACK(instr->skip_helpers, 1);
    PACK(instr->texture_non_uniform, 1);
    PACK(instr->sampler_non_uniform, 1);
+   PACK(instr->embedded_sampler, 1);
    PACK(instr->offset_non_uniform, 1);
 
 #undef PACK
@@ -565,7 +566,7 @@ nir_instrs_equal(const nir_instr *instr1, const nir_instr *instr2)
       if (alu1->op != alu2->op)
          return false;
 
-      /* We explicitly don't compare instr->exact. */
+      /* We explicitly don't compare instr->fp_math_ctrl. */
 
       if (alu1->no_signed_wrap != alu2->no_signed_wrap)
          return false;
@@ -747,14 +748,35 @@ nir_instrs_equal(const nir_instr *instr1, const nir_instr *instr2)
             return false;
       }
 
+      /* Compare indices, but allow fp_math_ctrl mismatches. */
       for (unsigned i = 0; i < info->num_indices; i++) {
-         if (intrinsic1->const_index[i] != intrinsic2->const_index[i])
-            return false;
+         nir_intrinsic_index_flag index = info->indices[i];
+
+         if (index == NIR_INTRINSIC_FP_MATH_CTRL) {
+            continue;
+         } else if (index == NIR_INTRINSIC_IO_SEMANTICS) {
+            nir_io_semantics sem1 = nir_intrinsic_io_semantics(intrinsic1);
+            nir_io_semantics sem2 = nir_intrinsic_io_semantics(intrinsic2);
+            sem1.no_signed_zero = false;
+            sem2.no_signed_zero = false;
+
+            if (memcmp(&sem1, &sem2, sizeof(sem1)))
+               return false;
+         } else {
+            unsigned size = nir_intrinsic_index_size(i);
+            unsigned offset = info->index_map[index] - 1;
+
+            if (memcmp(&intrinsic1->const_index[offset],
+                       &intrinsic2->const_index[offset],
+                       sizeof(intrinsic1->const_index[0]) * size))
+               return false;
+         }
       }
 
       return true;
    }
    case nir_instr_type_call:
+   case nir_instr_type_cmat_call:
    case nir_instr_type_jump:
    case nir_instr_type_undef:
    default:
@@ -800,14 +822,25 @@ nir_instr_set_add_or_rewrite(struct set *instr_set, nir_instr *instr,
       nir_def *def = nir_instr_def(instr);
       nir_def *new_def = nir_instr_def(match);
 
-      /* It's safe to replace an exact instruction with an inexact one as
-       * long as we make it exact.  If we got here, the two instructions are
-       * exactly identical in every other way so, once we've set the exact
-       * bit, they are the same.
+      /* It's safe to replace an instruction with an one with different fp_math_ctrl as
+       * long as we take the fp_math_ctrl union. If we got here, the two instructions are
+       * exactly identical in every other way.
        */
       if (instr->type == nir_instr_type_alu) {
-         nir_instr_as_alu(match)->exact |= nir_instr_as_alu(instr)->exact;
-         nir_instr_as_alu(match)->fp_fast_math |= nir_instr_as_alu(instr)->fp_fast_math;
+         nir_instr_as_alu(match)->fp_math_ctrl |= nir_instr_as_alu(instr)->fp_math_ctrl;
+      } else if (instr->type == nir_instr_type_intrinsic) {
+         nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
+         nir_intrinsic_instr *match_intr = nir_instr_as_intrinsic(match);
+         if (nir_intrinsic_has_io_semantics(intr) &&
+             !nir_intrinsic_io_semantics(intr).no_signed_zero) {
+            nir_io_semantics sem = nir_intrinsic_io_semantics(match_intr);
+            sem.no_signed_zero = false;
+            nir_intrinsic_set_io_semantics(match_intr, sem);
+         } else if (nir_intrinsic_has_fp_math_ctrl(intr)) {
+            unsigned fp_math_ctrl = nir_intrinsic_fp_math_ctrl(match_intr);
+            fp_math_ctrl |= nir_intrinsic_fp_math_ctrl(intr);
+            nir_intrinsic_set_fp_math_ctrl(match_intr, fp_math_ctrl);
+         }
       }
 
       assert(!def == !new_def);

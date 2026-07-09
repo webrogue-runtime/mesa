@@ -9,9 +9,9 @@
 #ifndef _RADEON_VCN_ENC_H
 #define _RADEON_VCN_ENC_H
 
-#include "radeon_vcn.h"
-#include "util/macros.h"
+#include "ac_vcn.h"
 #include "radeon_bitstream.h"
+#include "pipe/p_video_codec.h"
 
 #include "ac_vcn_enc.h"
 
@@ -159,6 +159,8 @@ struct radeon_enc_pic {
    rvcn_enc_qp_map_t enc_qp_map;
    rvcn_enc_metadata_buffer_t metadata;
    rvcn_enc_latency_t enc_latency;
+   rvcn_enc_h264_slice_info_var_t h264_slice_info_var;
+   rvcn_enc_hevc_slice_info_var_t hevc_slice_info_var;
 };
 
 struct radeon_encoder {

@@ -475,10 +475,9 @@ lower_load(nir_intrinsic_instr *intrin, struct lower_io_state *state,
            nir_def *array_index, nir_variable *var, nir_def *offset,
            unsigned component, const struct glsl_type *type)
 {
-   const bool lower_double = !glsl_type_is_integer(type) && state->options & nir_lower_io_lower_64bit_float_to_32;
    if (intrin->def.bit_size == 64 &&
-       (lower_double || (state->options & (nir_lower_io_lower_64bit_to_32_new |
-                                           nir_lower_io_lower_64bit_to_32)))) {
+       state->options & (nir_lower_io_lower_64bit_to_32_new |
+                         nir_lower_io_lower_64bit_to_32)) {
       nir_builder *b = &state->builder;
       bool use_high_dvec2_semantic = uses_high_dvec2_semantic(state, var);
 
@@ -600,6 +599,17 @@ emit_store(struct lower_io_state *state, nir_def *data,
    }
 
    int location = var->data.location;
+   bool dual_src_blend = var->data.index > 0;
+
+   /* Set FRAG_RESULT_DUAL_SRC_BLEND if the driver prefers that. */
+   if (dual_src_blend &&
+       b->shader->options->io_options & nir_io_use_frag_result_dual_src_blend) {
+      assert(b->shader->info.stage == MESA_SHADER_FRAGMENT);
+      assert(location == FRAG_RESULT_COLOR || location == FRAG_RESULT_DATA0);
+
+      location = FRAG_RESULT_DUAL_SRC_BLEND;
+      dual_src_blend = false;
+   }
 
    /* Maximum values in nir_io_semantics. */
    assert(num_slots <= 63);
@@ -608,7 +618,7 @@ emit_store(struct lower_io_state *state, nir_def *data,
    nir_io_semantics semantics = { 0 };
    semantics.location = location;
    semantics.num_slots = num_slots;
-   semantics.dual_source_blend_index = var->data.index;
+   semantics.dual_source_blend_index = dual_src_blend;
    semantics.gs_streams = gs_streams;
    semantics.medium_precision = is_medium_precision(b->shader, var);
    semantics.per_view = var->data.per_view;
@@ -627,10 +637,9 @@ lower_store(nir_intrinsic_instr *intrin, struct lower_io_state *state,
             nir_def *array_index, nir_variable *var, nir_def *offset,
             unsigned component, const struct glsl_type *type)
 {
-   const bool lower_double = !glsl_type_is_integer(type) && state->options & nir_lower_io_lower_64bit_float_to_32;
    if (intrin->src[1].ssa->bit_size == 64 &&
-       (lower_double || (state->options & (nir_lower_io_lower_64bit_to_32 |
-                                           nir_lower_io_lower_64bit_to_32_new)))) {
+       state->options & (nir_lower_io_lower_64bit_to_32 |
+                         nir_lower_io_lower_64bit_to_32_new)) {
       nir_builder *b = &state->builder;
 
       const unsigned slot_size = state->type_size(glsl_dvec_type(2), false);
@@ -970,6 +979,7 @@ nir_get_io_offset_src_number(const nir_intrinsic_instr *instr)
    case nir_intrinsic_load_output:
    case nir_intrinsic_load_pixel_local:
    case nir_intrinsic_load_shared:
+   case nir_intrinsic_load_shared_nv:
    case nir_intrinsic_load_task_payload:
    case nir_intrinsic_load_uniform:
    case nir_intrinsic_load_constant:
@@ -979,24 +989,35 @@ nir_get_io_offset_src_number(const nir_intrinsic_instr *instr)
    case nir_intrinsic_load_global_2x32:
    case nir_intrinsic_load_global_constant:
    case nir_intrinsic_load_global_etna:
+   case nir_intrinsic_load_global_nv:
    case nir_intrinsic_load_scratch:
+   case nir_intrinsic_load_scratch_nv:
+   case nir_intrinsic_load_scratch_intel:
    case nir_intrinsic_load_fs_input_interp_deltas:
    case nir_intrinsic_shared_atomic:
+   case nir_intrinsic_shared_atomic_nv:
    case nir_intrinsic_shared_atomic_swap:
+   case nir_intrinsic_shared_atomic_swap_nv:
    case nir_intrinsic_task_payload_atomic:
    case nir_intrinsic_task_payload_atomic_swap:
    case nir_intrinsic_global_atomic:
    case nir_intrinsic_global_atomic_2x32:
+   case nir_intrinsic_global_atomic_nv:
    case nir_intrinsic_global_atomic_swap:
    case nir_intrinsic_global_atomic_swap_2x32:
+   case nir_intrinsic_global_atomic_swap_nv:
    case nir_intrinsic_load_coefficients_agx:
    case nir_intrinsic_load_shared_block_intel:
    case nir_intrinsic_load_global_block_intel:
    case nir_intrinsic_load_shared_uniform_block_intel:
    case nir_intrinsic_load_global_constant_uniform_block_intel:
+   case nir_intrinsic_load_urb_lsc_intel:
    case nir_intrinsic_load_shared2_amd:
    case nir_intrinsic_load_const_ir3:
    case nir_intrinsic_load_shared_ir3:
+   case nir_intrinsic_load_push_data_intel:
+   case nir_intrinsic_vild_nv:
+   case nir_intrinsic_load_shader_indirect_data_intel:
       return 0;
    case nir_intrinsic_load_ubo:
    case nir_intrinsic_load_ubo_vec4:
@@ -1008,14 +1029,22 @@ nir_get_io_offset_src_number(const nir_intrinsic_instr *instr)
    case nir_intrinsic_load_per_primitive_output:
    case nir_intrinsic_load_interpolated_input:
    case nir_intrinsic_load_global_amd:
+   case nir_intrinsic_load_global_bounded:
+   case nir_intrinsic_load_global_constant_offset:
+   case nir_intrinsic_load_global_constant_bounded:
    case nir_intrinsic_store_output:
    case nir_intrinsic_store_pixel_local:
    case nir_intrinsic_store_shared:
+   case nir_intrinsic_store_shared_nv:
    case nir_intrinsic_store_task_payload:
    case nir_intrinsic_store_global:
    case nir_intrinsic_store_global_2x32:
    case nir_intrinsic_store_global_etna:
+   case nir_intrinsic_store_global_nv:
+   case nir_intrinsic_store_urb_lsc_intel:
    case nir_intrinsic_store_scratch:
+   case nir_intrinsic_store_scratch_nv:
+   case nir_intrinsic_store_scratch_intel:
    case nir_intrinsic_ssbo_atomic:
    case nir_intrinsic_ssbo_atomic_swap:
    case nir_intrinsic_ldc_nv:
@@ -1025,6 +1054,7 @@ nir_get_io_offset_src_number(const nir_intrinsic_instr *instr)
    case nir_intrinsic_store_shared_block_intel:
    case nir_intrinsic_load_ubo_uniform_block_intel:
    case nir_intrinsic_load_ssbo_uniform_block_intel:
+   case nir_intrinsic_load_urb_vec4_intel:
    case nir_intrinsic_load_buffer_amd:
    case nir_intrinsic_store_shared2_amd:
    case nir_intrinsic_store_shared_ir3:
@@ -1036,6 +1066,7 @@ nir_get_io_offset_src_number(const nir_intrinsic_instr *instr)
    case nir_intrinsic_store_per_primitive_output:
    case nir_intrinsic_load_attribute_pan:
    case nir_intrinsic_store_ssbo_block_intel:
+   case nir_intrinsic_store_urb_vec4_intel:
    case nir_intrinsic_store_buffer_amd:
    case nir_intrinsic_store_ssbo_intel:
    case nir_intrinsic_store_global_amd:
@@ -1068,6 +1099,12 @@ nir_get_io_offset_src(nir_intrinsic_instr *instr)
    return idx >= 0 ? &instr->src[idx] : NULL;
 }
 
+#define IMG_CASE(name)                          \
+   case nir_intrinsic_image_##name:             \
+   case nir_intrinsic_image_deref_##name:       \
+   case nir_intrinsic_bindless_image_##name:    \
+   case nir_intrinsic_image_heap_##name
+
 /**
  * Return the index or handle source number for a load/store intrinsic or -1
  * if there's no index or handle.
@@ -1093,11 +1130,10 @@ nir_get_io_index_src_number(const nir_intrinsic_instr *instr)
    case nir_intrinsic_ldcx_nv:
    case nir_intrinsic_load_ssbo_intel:
    case nir_intrinsic_load_ssbo_block_intel:
-   case nir_intrinsic_store_global_block_intel:
-   case nir_intrinsic_store_shared_block_intel:
    case nir_intrinsic_load_ubo_uniform_block_intel:
    case nir_intrinsic_load_ssbo_uniform_block_intel:
-#define IMG_CASE(name) case nir_intrinsic_image_##name: case nir_intrinsic_bindless_image_##name
+   case nir_intrinsic_ssbo_atomic:
+   case nir_intrinsic_ssbo_atomic_swap:
    IMG_CASE(load):
    IMG_CASE(store):
    IMG_CASE(sparse_load):
@@ -1113,7 +1149,9 @@ nir_get_io_index_src_number(const nir_intrinsic_instr *instr)
    IMG_CASE(order):
    IMG_CASE(fragment_mask_load_amd):
       return 0;
-#undef IMG_CASE
+   case nir_intrinsic_image_deref_load_param_intel:
+   case nir_intrinsic_image_heap_load_param_intel:
+      return 0;
    case nir_intrinsic_store_ssbo:
    case nir_intrinsic_store_per_vertex_output:
    case nir_intrinsic_store_per_view_output:
@@ -1127,6 +1165,76 @@ nir_get_io_index_src_number(const nir_intrinsic_instr *instr)
    }
 }
 
+int
+nir_get_io_data_src_number(const nir_intrinsic_instr *intr)
+{
+   switch (intr->intrinsic) {
+   case nir_intrinsic_store_output:
+   case nir_intrinsic_store_pixel_local:
+   case nir_intrinsic_store_per_vertex_output:
+   case nir_intrinsic_store_per_primitive_output:
+   case nir_intrinsic_store_ssbo:
+   case nir_intrinsic_store_ssbo_block_intel:
+   case nir_intrinsic_store_ssbo_intel:
+   case nir_intrinsic_store_ssbo_ir3:
+   case nir_intrinsic_store_shared:
+   case nir_intrinsic_store_shared_block_intel:
+   case nir_intrinsic_store_shared_ir3:
+   case nir_intrinsic_store_shared_nv:
+   case nir_intrinsic_store_task_payload:
+   case nir_intrinsic_store_global:
+   case nir_intrinsic_store_global_block_intel:
+   case nir_intrinsic_store_global_amd:
+   case nir_intrinsic_store_global_2x32:
+   case nir_intrinsic_store_global_ir3:
+   case nir_intrinsic_store_global_etna:
+   case nir_intrinsic_store_global_nv:
+   case nir_intrinsic_store_scratch:
+   case nir_intrinsic_store_scratch_nv:
+   case nir_intrinsic_store_scratch_intel:
+   case nir_intrinsic_store_raw_output_pan:
+   case nir_intrinsic_store_combined_output_pan:
+   case nir_intrinsic_store_tile_pan:
+   case nir_intrinsic_store_global_cvt_pan:
+   case nir_intrinsic_store_global_psiz_pan:
+   case nir_intrinsic_store_tlb_sample_color_v3d:
+   case nir_intrinsic_store_uvs_agx:
+   case nir_intrinsic_store_local_pixel_agx:
+   case nir_intrinsic_store_agx:
+   case nir_intrinsic_store_urb_lsc_intel:
+   case nir_intrinsic_store_urb_vec4_intel:
+      return 0;
+
+   case nir_intrinsic_store_deref:
+   case nir_intrinsic_shared_atomic:
+   case nir_intrinsic_shared_atomic_swap:
+   case nir_intrinsic_deref_atomic:
+   case nir_intrinsic_deref_atomic_swap:
+   case nir_intrinsic_global_atomic:
+   case nir_intrinsic_global_atomic_amd:
+   case nir_intrinsic_global_atomic_swap:
+      return 1;
+
+   case nir_intrinsic_ssbo_atomic:
+   case nir_intrinsic_ssbo_atomic_ir3:
+   case nir_intrinsic_ssbo_atomic_swap:
+   case nir_intrinsic_ssbo_atomic_swap_ir3:
+      return 2;
+
+      /* clang-format off */
+   IMG_CASE(store):
+   IMG_CASE(atomic):
+   IMG_CASE(atomic_swap):
+      return 3;
+      /* clang-format on */
+
+   default:
+      return -1;
+   }
+}
+
+#undef IMG_CASE
+
 /**
  * Return the offset or handle source for a load/store intrinsic.
  */
@@ -1135,6 +1243,17 @@ nir_get_io_index_src(nir_intrinsic_instr *instr)
 {
    const int idx = nir_get_io_index_src_number(instr);
    return idx >= 0 ? &instr->src[idx] : NULL;
+}
+
+/**
+ * Return the data source for a store intrinsic (including an atomic).  For
+ * atomic swaps, this returns the first of the two contiguous sources.
+ */
+nir_src *
+nir_get_io_data_src(nir_intrinsic_instr *intr)
+{
+   const int idx = nir_get_io_data_src_number(intr);
+   return idx >= 0 ? &intr->src[idx] : NULL;
 }
 
 /**
@@ -1159,6 +1278,22 @@ nir_get_io_arrayed_index_src_number(const nir_intrinsic_instr *instr)
 }
 
 bool
+nir_is_shared_access(nir_intrinsic_instr *intr)
+{
+   return intr->intrinsic == nir_intrinsic_load_shared ||
+          intr->intrinsic == nir_intrinsic_store_shared ||
+          intr->intrinsic == nir_intrinsic_shared_atomic ||
+          intr->intrinsic == nir_intrinsic_shared_atomic_swap ||
+          intr->intrinsic == nir_intrinsic_load_shared_block_intel ||
+          intr->intrinsic == nir_intrinsic_store_shared_block_intel ||
+          intr->intrinsic == nir_intrinsic_load_shared_uniform_block_intel ||
+          intr->intrinsic == nir_intrinsic_load_shared2_amd ||
+          intr->intrinsic == nir_intrinsic_store_shared2_amd ||
+          intr->intrinsic == nir_intrinsic_shared_append_amd ||
+          intr->intrinsic == nir_intrinsic_shared_consume_amd;
+}
+
+bool
 nir_is_output_load(nir_intrinsic_instr *intr)
 {
    return intr->intrinsic == nir_intrinsic_load_output ||
@@ -1174,7 +1309,8 @@ nir_is_input_load(nir_intrinsic_instr *intr)
           intr->intrinsic == nir_intrinsic_load_per_vertex_input ||
           intr->intrinsic == nir_intrinsic_load_per_primitive_input ||
           intr->intrinsic == nir_intrinsic_load_interpolated_input ||
-          intr->intrinsic == nir_intrinsic_load_input_vertex;
+          intr->intrinsic == nir_intrinsic_load_input_vertex ||
+          intr->intrinsic == nir_intrinsic_load_fs_input_interp_deltas;
 }
 
 /**
@@ -1260,11 +1396,10 @@ nir_lower_io_passes(nir_shader *nir, bool renumber_vs_inputs)
             (renumber_vs_inputs ? nir_lower_io_lower_64bit_to_32_new : nir_lower_io_lower_64bit_to_32) |
                nir_lower_io_use_interpolated_input_intrinsics);
 
-   /* nir_io_add_const_offset_to_base needs actual constants. */
+   /* Fold constant offset srcs for IO. */
    NIR_PASS(_, nir, nir_opt_constant_folding);
-   NIR_PASS(_, nir, nir_io_add_const_offset_to_base, nir_var_shader_in | nir_var_shader_out);
 
-   /* This must be called after nir_io_add_const_offset_to_base. */
+   /* This must be called after folding constant offset srcs. */
    if (nir->info.stage != MESA_SHADER_MESH &&
        !(nir->options->support_indirect_inputs & BITFIELD_BIT(nir->info.stage)))
       NIR_PASS(_, nir, nir_lower_io_indirect_loads, nir_var_shader_in);

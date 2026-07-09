@@ -474,19 +474,19 @@ BEGIN_TEST(optimize.clamp)
 
       /* correct NaN behaviour with precise */
       if (cfg.min == aco_opcode::v_min_f16 || cfg.min == aco_opcode::v_min_f32) {
-         //~f(16|32)! v1: %res7 = @med3 @ub, @lb, %a
-         //~f(16|32)! p_unit_test 7, %res7
+         //~.*f(16|32)! v1: (NaNPreserve)%res7 = @med3 @ub, @lb, %a
+         //~.*f(16|32)! p_unit_test 7, %res7
          Builder::Result max = bld.vop2(cfg.max, bld.def(v1), cfg.lb, inputs[0]);
-         max.def(0).setPrecise(true);
+         max.def(0).setNaNPreserve(true);
          Builder::Result min = bld.vop2(cfg.min, bld.def(v1), cfg.ub, max);
-         max.def(0).setPrecise(true);
+         min.def(0).setNaNPreserve(true);
          writeout(7, min);
 
-         //~f(16|32)! v1: (precise)%res8_tmp = @min @ub, %a
-         //~f(16|32)! v1: %res8 = @max @lb, %res8_tmp
-         //~f(16|32)! p_unit_test 8, %res8
+         //~.*f(16|32)! v1: (NaNPreserve)%res8_tmp = @min @ub, %a
+         //~.*f(16|32)! v1: %res8 = @max @lb, %res8_tmp
+         //~.*f(16|32)! p_unit_test 8, %res8
          min = bld.vop2(cfg.min, bld.def(v1), cfg.ub, inputs[0]);
-         min.def(0).setPrecise(true);
+         min.def(0).setNaNPreserve(true);
          writeout(8, bld.vop2(cfg.max, bld.def(v1), cfg.lb, min));
       }
 
@@ -1308,8 +1308,7 @@ BEGIN_TEST(optimize.mad_mix.output_conv.modifiers)
       //! p_unit_test 0, %res0
       writeout(0, f2f16(fabs(fadd(a, b))));
 
-      //! v1: %res1_add = v_add_f32 %1, %2
-      //! v2b: %res1 = v_cvt_f16_f32 -%res1_add
+      //! v2b: %res1 = v_fma_mixlo_f16 1.0, -%a, -%b
       //! p_unit_test 1, %res1
       writeout(1, f2f16(fneg(fadd(a, b))));
 
@@ -1361,8 +1360,8 @@ BEGIN_TEST(optimize.mad_mix.fma.basic)
       writeout(1, fadd(fmul(a, b), f2f32(c16)));
 
       /* omod/clamp check */
-      //! v1: %res2_mul = v_fma_mix_f32 lo(%a16), %b, neg(0)
-      //! v1: %res2 = v_add_f32 %res2_mul, %c *2
+      //! v1: %res2_fma = v_fma_mix_f32 lo(%a16), %b, %c
+      //! v1: %res2 = v_mul_f32 2.0, %res2_fma
       //! p_unit_test 2, %res2
       writeout(2, bld.vop2(aco_opcode::v_mul_f32, bld.def(v1), Operand::c32(0x40000000),
                            fadd(fmul(f2f32(a16), b), c)));
@@ -2041,7 +2040,7 @@ BEGIN_TEST(optimizer.trans_inline_constant)
    finish_opt_test();
 END_TEST
 
-BEGIN_TEST(optimizer.trans_no_omod)
+BEGIN_TEST(optimizer.trans_omod)
    //>> s1: %a:s[0] = p_startpgm
    if (!setup_cs("s1", GFX12))
       return;
@@ -2052,6 +2051,12 @@ BEGIN_TEST(optimizer.trans_no_omod)
    Temp dst = bld.vop3(aco_opcode::v_s_log_f32, bld.def(s1), inputs[0]);
    writeout(0, bld.vop2(aco_opcode::v_mul_legacy_f32, bld.def(v1), dst,
                         bld.copy(bld.def(v1), Operand::c32(0x3f000000))));
+
+   //! s1: %res1 = v_s_rcp_f32 -%a *0.5
+   //! p_unit_test 1, %res1
+   dst = bld.vop3(aco_opcode::v_s_rcp_f32, bld.def(s1), inputs[0]);
+   writeout(1, bld.sop2(aco_opcode::s_mul_f32, bld.def(s1), dst,
+                        bld.copy(bld.def(s1), Operand::c32(0xbf000000))));
 
    finish_opt_test();
 END_TEST
@@ -2316,4 +2321,83 @@ BEGIN_TEST(optimizer.pk_fma)
 
       finish_opt_test();
    }
+END_TEST
+
+static Builder::Result
+cvt_pk_rtz(Definition def, Builder::Op op1, Builder::Op op2)
+{
+   if (bld.program->gfx_level >= GFX8 && bld.program->gfx_level < GFX10)
+      return bld.vop3(aco_opcode::v_cvt_pkrtz_f16_f32_e64, def, op1, op2);
+   else
+      return bld.vop2(aco_opcode::v_cvt_pkrtz_f16_f32, def, op1, op2);
+}
+
+BEGIN_TEST(optimizer.pk_mul_pk_cvt)
+   for (unsigned i = GFX9; i <= GFX10; i++) {
+      //>> v1: %a:v[0],  v1: %b:v[1] = p_startpgm
+      if (!setup_cs("v1 v1", (amd_gfx_level)i))
+         continue;
+
+      Temp a = inputs[0];
+      Temp b = inputs[1];
+
+      //~gfx9! v1: %res0 = v_cvt_pkrtz_f16_f32_e64 %a, %b
+      //~gfx10! v1: %res0 = v_cvt_pkrtz_f16_f32 %a, %b
+      //! p_unit_test 0, %res0
+      Builder::Result cvt = cvt_pk_rtz(bld.def(v1), a, b);
+      Builder::Result mul =
+         bld.vop3p(aco_opcode::v_pk_mul_f16, bld.def(v1), cvt, Operand::c16(0x3c00), 0x0, 0x1);
+      writeout(0, mul);
+
+      //~gfx9! v1: %res1 = v_cvt_pkrtz_f16_f32_e64 -%b, %b
+      //~gfx10! v1: %res1 = v_cvt_pkrtz_f16_f32 -%b, %b
+      //! p_unit_test 1, %res1
+      cvt = cvt_pk_rtz(bld.def(v1), a, b);
+      mul = bld.vop3p(aco_opcode::v_pk_mul_f16, bld.def(v1), cvt, Operand::c16(0x3c00), 0x1, 0x1);
+      mul->valu().neg_lo[1] = true;
+      writeout(1, mul);
+
+      //~gfx9! v1: %tmp = v_cvt_pkrtz_f16_f32_e64 %a, %b
+      //~gfx10! v1: %tmp = v_cvt_pkrtz_f16_f32 %a, %b
+      //! v1: %res2 = v_pk_mul_f16 %tmp, 1.0.xx clamp
+      //! p_unit_test 2, %res2
+      cvt = cvt_pk_rtz(bld.def(v1), a, b);
+      mul = bld.vop3p(aco_opcode::v_pk_mul_f16, bld.def(v1), cvt, Operand::c16(0x3c00), 0x0, 0x1);
+      mul->valu().clamp = true;
+      writeout(2, mul);
+
+      //~gfx9! v1: %res3 = v_cvt_pkrtz_f16_f32_e64 %b, %a
+      //~gfx10! v1: %res3 = v_cvt_pkrtz_f16_f32 %b, %a
+      //! p_unit_test 3, %res3
+      cvt = cvt_pk_rtz(bld.def(v1), a, b);
+      mul = bld.vop3p(aco_opcode::v_pk_mul_f16, bld.def(v1), cvt, Operand::c16(0x3c00), 0x1, 0x0);
+      writeout(3, mul);
+
+      finish_opt_test();
+   }
+END_TEST
+
+BEGIN_TEST(optimizer.dotc_dpp)
+   //>>  v1: %a:v[0],  v1: %b:v[1],  v1: %c:v[2],  v1: %d:v[3] = p_startpgm
+   if (!setup_cs("v1 v1 v1 v1", GFX10_3))
+      return;
+
+   Temp a = inputs[0];
+   Temp b = inputs[1];
+   Temp c = inputs[2];
+   Temp d = inputs[3];
+
+   //! v1: %dot2 = v_dot2c_f32_f16 %a, %b, %c dpp8:[0,0,0,0,0,0,0,0] fi
+   //! p_unit_test 0, %dot2
+   Temp dpp = bld.vop1_dpp8(aco_opcode::v_mov_b32, bld.def(v1), a, 0);
+   Temp dot2 = bld.vop3p(aco_opcode::v_dot2_f32_f16, bld.def(v1), dpp, b, c, 0x0, 0x7);
+   writeout(0, dot2);
+
+   //!  v1: %dot4 = v_dot4c_i32_i8 %a, %b, %d row_mirror bound_ctrl:1 fi
+   //! p_unit_test 1, %dot4
+   dpp = bld.vop1_dpp(aco_opcode::v_mov_b32, bld.def(v1), a, dpp_row_mirror);
+   Temp dot4 = bld.vop3p(aco_opcode::v_dot4_i32_i8, bld.def(v1), dpp, b, d, 0x0, 0x7);
+   writeout(1, dot4);
+
+   finish_opt_test();
 END_TEST

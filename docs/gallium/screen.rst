@@ -422,8 +422,6 @@ Capability about the features and limits of the driver/GPU.
 * ``pipe_caps.doubles``: Whether double precision floating-point operations
   are supported.
 * ``pipe_caps.int64``: Whether 64-bit integer operations are supported.
-* ``pipe_caps.tgsi_tex_txf_lz``: Whether TEX_LZ and TXF_LZ opcodes are
-  supported.
 * ``pipe_caps.shader_clock``: Whether the CLOCK opcode is supported.
 * ``pipe_caps.polygon_mode_fill_rectangle``: Whether the
   PIPE_POLYGON_MODE_FILL_RECTANGLE mode is supported for
@@ -674,6 +672,10 @@ Capability about the features and limits of the driver/GPU.
   dilation.
 * ``pipe_caps.conservative_raster_dilate_granularity``: The conservative rasterization
   dilation granularity for values relative to the minimum dilation.
+* ``pipe_caps.clear_masked``: Whether ``clear`` can accept a color_clear_mask for all color buffers and stencil_clear_mask.
+* ``pipe_caps.prefer_persp``: Whether the driver prefers perspective correct
+  or linear interpolation. This is a performance hint.
+* ``pipe_caps.blit_3d``: Whether pipe_context::blit can have depth > 1.
 
 
 .. _pipe_shader_caps:
@@ -835,6 +837,12 @@ resources might be created and handled quite differently.
   to a shader and can be used with load, store, and atomic instructions.
 * ``PIPE_BIND_SHADER_IMAGE``: A buffer or texture with a format that can be
   bound to a shader and can be used with load, store, and atomic instructions.
+* ``PIPE_BIND_OPENCL``: Potentially higher precision requirements than gl/vk.
+  Float values need to be 1.5 (FULL_PROFILE) or 2.0 (EMBEDDED_PROFILE) ULPs
+  precise. For float to int conversion, the preferred rounding mode is "to
+  nearest" and if a different rounding mode is chosen, the absolute error
+  must be <= 0.6. Details can be found here:
+  https://registry.khronos.org/OpenCL/specs/3.0-unified/html/OpenCL_C.html#conversion-rules
 * ``PIPE_BIND_COMMAND_ARGS_BUFFER``: A buffer that may be sourced by the
   GPU command processor. It can contain, for example, the arguments to
   indirect draw calls.

@@ -17,8 +17,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "util/u_math.h"
-#include "util/u_memory.h"
 #include <vulkan/vulkan.h>
 #include "ac_cmdbuf.h"
 #include "amd_family.h"
@@ -42,7 +40,7 @@ enum radeon_bo_flag { /* bitfield */
                       RADEON_FLAG_CPU_ACCESS = (1 << 1),
                       RADEON_FLAG_NO_CPU_ACCESS = (1 << 2),
                       RADEON_FLAG_VIRTUAL = (1 << 3),
-                      RADEON_FLAG_VA_UNCACHED = (1 << 4),
+                      RADEON_FLAG_GL2_BYPASS = (1 << 4),
                       RADEON_FLAG_IMPLICIT_SYNC = (1 << 5),
                       RADEON_FLAG_NO_INTERPROCESS_SHARING = (1 << 6),
                       RADEON_FLAG_READ_ONLY = (1 << 7),
@@ -53,6 +51,9 @@ enum radeon_bo_flag { /* bitfield */
                       RADEON_FLAG_DISCARDABLE = (1 << 12),
                       RADEON_FLAG_GFX12_ALLOW_DCC = (1 << 13),
                       RADEON_FLAG_VM_UPDATE_WAIT = (1 << 14),
+                      RADEON_FLAG_VM_PAD_1PAGE = (1 << 15),
+                      RADEON_FLAG_ENCRYPTED = (1 << 16),
+                      RADEON_FLAG_EMULATE_SPARSE_RESIDENCY = (1 << 17),
 };
 
 enum radeon_ctx_priority {
@@ -186,6 +187,7 @@ struct radv_winsys_submit_info {
    struct ac_cmdbuf **continue_preamble_cs;
    struct ac_cmdbuf **postamble_cs;
    bool uses_shadow_regs;
+   bool secure;
 };
 
 /* Kernel effectively allows 0-31. This sets some priorities for fixed
@@ -323,6 +325,8 @@ struct radeon_winsys {
                                   uint32_t signal_count,
                                   const struct vk_sync_signal *signals);
 
+   int (*reserve_vmid)(struct radeon_winsys *ws);
+   void (*unreserve_vmid)(struct radeon_winsys *ws);
 };
 
 static inline uint64_t

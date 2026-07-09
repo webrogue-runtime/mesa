@@ -454,9 +454,9 @@ enum pipe_flush_flags
  * Resource binding flags -- gallium frontends must specify in advance all
  * the ways a resource might be used.
  */
-#define PIPE_BIND_DEPTH_STENCIL        (1 << 0) /* create_surface */
-#define PIPE_BIND_RENDER_TARGET        (1 << 1) /* create_surface */
-#define PIPE_BIND_BLENDABLE            (1 << 2) /* create_surface */
+#define PIPE_BIND_DEPTH_STENCIL        (1 << 0) /* set_framebuffer_state */
+#define PIPE_BIND_RENDER_TARGET        (1 << 1) /* set_framebuffer_state */
+#define PIPE_BIND_BLENDABLE            (1 << 2) /* set_framebuffer_state */
 #define PIPE_BIND_SAMPLER_VIEW         (1 << 3) /* create_sampler_view */
 #define PIPE_BIND_VERTEX_BUFFER        (1 << 4) /* set_vertex_buffers */
 #define PIPE_BIND_INDEX_BUFFER         (1 << 5) /* draw_elements */
@@ -470,7 +470,7 @@ enum pipe_flush_flags
 #define PIPE_BIND_GLOBAL               (1 << 13) /* set_global_binding */
 #define PIPE_BIND_SHADER_BUFFER        (1 << 14) /* set_shader_buffers */
 #define PIPE_BIND_SHADER_IMAGE         (1 << 15) /* set_shader_images */
-/* gap */
+#define PIPE_BIND_OPENCL               (1 << 16) /* potentially higher precision reqs */
 #define PIPE_BIND_COMMAND_ARGS_BUFFER  (1 << 17) /* pipe_draw_info.indirect */
 #define PIPE_BIND_QUERY_BUFFER         (1 << 18) /* get_query_result_resource */
 
@@ -551,6 +551,9 @@ enum pipe_tess_spacing {
 
 /**
  * Query object types
+ *
+ * Note, PIPE_QUERY_x has somehow become ABI between virgl (guest) and
+ * virglrenderer (host).  Mistakes were made, now we live with it.
  */
 enum pipe_query_type {
    PIPE_QUERY_OCCLUSION_COUNTER,
@@ -567,6 +570,7 @@ enum pipe_query_type {
    PIPE_QUERY_GPU_FINISHED,
    PIPE_QUERY_PIPELINE_STATISTICS,
    PIPE_QUERY_PIPELINE_STATISTICS_SINGLE,
+   PIPE_QUERY_TIMESTAMP_RAW,
    PIPE_QUERY_TYPES,
    /* start of driver queries, see pipe_screen::get_driver_query_info */
    PIPE_QUERY_DRIVER_SPECIFIC = 256,
@@ -697,7 +701,18 @@ enum pipe_conservative_raster_mode
 #define PIPE_SHADER_SUBGROUP_FEATURE_SHUFFLE_RELATIVE (1 << 5)
 #define PIPE_SHADER_SUBGROUP_FEATURE_CLUSTERED        (1 << 6)
 #define PIPE_SHADER_SUBGROUP_FEATURE_QUAD             (1 << 7)
+/** GL supported subgroup features */
 #define PIPE_SHADER_SUBGROUP_NUM_FEATURES             8
+
+/* VK_SUBGROUP_FEATURE_ROTATE_BIT */
+#define PIPE_SHADER_SUBGROUP_FEATURE_ROTATE           (1 << 9)
+/* VK_SUBGROUP_FEATURE_ROTATE_CLUSTERED_BIT */
+#define PIPE_SHADER_SUBGROUP_FEATURE_ROTATE_CLUSTERED (1 << 10)
+/** Vulkan and OpenCL supported subgroup features */
+#define PIPE_SHADER_SUBGROUP_FEATURE_MASK \
+   (BITFIELD_MASK(PIPE_SHADER_SUBGROUP_NUM_FEATURES) | \
+   PIPE_SHADER_SUBGROUP_FEATURE_ROTATE | \
+   PIPE_SHADER_SUBGROUP_FEATURE_ROTATE_CLUSTERED)
 
 enum pipe_point_size_lower_mode {
    PIPE_POINT_SIZE_LOWER_ALWAYS,
@@ -916,6 +931,7 @@ struct pipe_caps {
    bool shareable_shaders;
    bool copy_between_compressed_and_plain_formats;
    bool clear_scissored;
+   bool clear_masked;
    bool draw_parameters;
    bool shader_pack_half_float;
    bool multi_draw_indirect;
@@ -944,7 +960,6 @@ struct pipe_caps {
    bool fp16;
    bool doubles;
    bool int64;
-   bool tgsi_tex_txf_lz;
    bool shader_clock;
    bool shader_realtime_clock;
    bool polygon_mode_fill_rectangle;
@@ -1045,6 +1060,9 @@ struct pipe_caps {
    bool call_finalize_nir_in_linker;
    bool mesh_shader;
    bool representative_fragment_test;
+   bool prefer_persp;
+   bool blit_3d;
+   bool glsl_bindless_handles_are_32bit;
 
    int accelerated;
    int min_texel_offset;

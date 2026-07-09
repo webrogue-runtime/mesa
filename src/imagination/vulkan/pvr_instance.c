@@ -28,6 +28,7 @@
 #include "pvr_entrypoints.h"
 #include "pvr_macros.h"
 #include "pvr_physical_device.h"
+#include "pvr_winsys.h"
 #include "pvr_wsi.h"
 
 #if defined(VK_USE_PLATFORM_DISPLAY_KHR)
@@ -35,26 +36,6 @@
 #else
 #   define PVR_USE_WSI_PLATFORM_DISPLAY false
 #endif
-
-struct pvr_drm_device_config {
-   struct pvr_drm_device_info {
-      const char *name;
-      size_t len;
-   } render;
-};
-
-#define DEF_CONFIG(render_)                                      \
-   {                                                             \
-      .render = { .name = render_, .len = sizeof(render_) - 1 }, \
-   }
-
-/* This is the list of supported DRM render driver configs. */
-static const struct pvr_drm_device_config pvr_drm_configs[] = {
-   DEF_CONFIG("mediatek,mt8173-gpu"),
-   DEF_CONFIG("ti,am62-gpu"),
-   DEF_CONFIG("ti,j721s2-gpu"),
-};
-#undef DEF_CONFIG
 
 static const struct vk_instance_extension_table pvr_instance_extensions = {
    .KHR_device_group_creation = true,
@@ -69,10 +50,16 @@ static const struct vk_instance_extension_table pvr_instance_extensions = {
 #ifdef VK_USE_PLATFORM_WAYLAND_KHR
    .KHR_wayland_surface = true,
 #endif
+#ifdef VK_USE_PLATFORM_XCB_KHR
+   .KHR_xcb_surface = true,
+#endif
+#ifdef VK_USE_PLATFORM_XLIB_KHR
+   .KHR_xlib_surface = true,
+#endif
    .EXT_debug_report = true,
    .EXT_debug_utils = true,
 #ifndef VK_USE_PLATFORM_WIN32_KHR
-   .EXT_headless_surface = PVR_USE_WSI_PLATFORM && false,
+   .EXT_headless_surface = PVR_USE_WSI_PLATFORM,
 #endif
 };
 
@@ -97,28 +84,39 @@ static VkResult pvr_get_drm_devices(void *const obj,
 }
 
 static bool
-pvr_drm_device_compatible(const struct pvr_drm_device_info *const info,
-                          drmDevice *const drm_dev)
+pvr_drm_device_is_compatible(drmDevicePtr drm_dev)
 {
-   char **const compatible = drm_dev->deviceinfo.platform->compatible;
+   drmVersionPtr version;
+   bool is_pvr;
+   int32_t fd;
 
-   for (char **compat = compatible; *compat; compat++) {
-      if (strncmp(*compat, info->name, info->len) == 0)
-         return true;
+   fd = open(drm_dev->nodes[DRM_NODE_RENDER], O_RDWR | O_CLOEXEC);
+   if (fd < 0) {
+      mesa_logd("Failed to open render node: %s\n",
+                drm_dev->nodes[DRM_NODE_RENDER]);
+
+      return false;
    }
 
-   return false;
-}
+   version = drmGetVersion(fd);
+   if (!version) {
+      mesa_logd("Failed to get version information for render node: %s\n",
+                drm_dev->nodes[DRM_NODE_RENDER]);
 
-static const struct pvr_drm_device_config *
-pvr_drm_device_get_config(drmDevice *const drm_dev)
-{
-   for (size_t i = 0U; i < ARRAY_SIZE(pvr_drm_configs); i++) {
-      if (pvr_drm_device_compatible(&pvr_drm_configs[i].render, drm_dev))
-         return &pvr_drm_configs[i];
+      close(fd);
+      return false;
    }
 
-   return NULL;
+   is_pvr = !strcmp(version->name, PVR_DRM_DRIVER_NAME);
+
+#if defined(PVR_SUPPORT_SERVICES_DRIVER)
+   is_pvr |= !strcmp(version->name, PVR_SRV_DRIVER_NAME);
+#endif /* defined(PVR_SUPPORT_SERVICES_DRIVER) */
+
+   drmFreeVersion(version);
+   close(fd);
+
+   return is_pvr;
 }
 
 static bool pvr_drm_device_is_compatible_display(drmDevicePtr drm_dev)
@@ -177,8 +175,6 @@ pvr_physical_device_enumerate(struct vk_instance *const vk_instance)
    struct pvr_instance *const instance =
       container_of(vk_instance, struct pvr_instance, vk);
 
-   const struct pvr_drm_device_config *config = NULL;
-
    drmDevicePtr drm_display_device = NULL;
    drmDevicePtr drm_render_device = NULL;
    struct pvr_physical_device *pdevice;
@@ -218,14 +214,15 @@ pvr_physical_device_enumerate(struct vk_instance *const vk_instance)
       if (!(drm_dev->available_nodes & BITFIELD_BIT(DRM_NODE_RENDER)))
          continue;
 
-      config = pvr_drm_device_get_config(drm_dev);
-      if (config) {
-         drm_render_device = drm_dev;
-         break;
-      }
+
+      if (!pvr_drm_device_is_compatible(drm_dev))
+         continue;
+
+      drm_render_device = drm_dev;
+      break;
    }
 
-   if (!config) {
+   if (!drm_render_device) {
       result = VK_SUCCESS;
       goto out_free_drm_devices;
    }
@@ -300,7 +297,7 @@ out:
 }
 
 static bool
-pvr_get_driver_build_sha(uint8_t sha_out[const static SHA1_DIGEST_LENGTH])
+pvr_get_driver_build_sha(struct pvr_instance *instance)
 {
    const struct build_id_note *note;
    unsigned build_id_len;
@@ -312,12 +309,13 @@ pvr_get_driver_build_sha(uint8_t sha_out[const static SHA1_DIGEST_LENGTH])
    }
 
    build_id_len = build_id_length(note);
-   if (build_id_len < SHA1_DIGEST_LENGTH) {
+   if (build_id_len < BUILD_ID_EXPECTED_HASH_LENGTH) {
       mesa_loge("Build-id too short. It needs to be a SHA.");
       return false;
    }
 
-   memcpy(sha_out, build_id_data(note), SHA1_DIGEST_LENGTH);
+   STATIC_ASSERT(sizeof(instance->driver_build_sha) == BLAKE3_KEY_LEN);
+   copy_build_id_to_sha1(instance->driver_build_sha, note);
 
    return true;
 }
@@ -367,7 +365,7 @@ VkResult pvr_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
 
    VG(VALGRIND_CREATE_MEMPOOL(instance, 0, false));
 
-   if (!pvr_get_driver_build_sha(instance->driver_build_sha)) {
+   if (!pvr_get_driver_build_sha(instance)) {
       result = vk_errorf(NULL,
                          VK_ERROR_INITIALIZATION_FAILED,
                          "Failed to get driver build sha.");

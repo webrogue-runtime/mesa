@@ -83,6 +83,8 @@ error2hangdump = executable(
   files('error2hangdump.c',
         'error2hangdump_lib.c',
         'error2hangdump_lib.h',
+        'error2hangdump_xe_lib.c',
+        'error2hangdump_xe_lib.h',
         'error2hangdump_xe.c',
         'error2hangdump_xe.h',
         'error_decode_lib.c',
@@ -99,6 +101,10 @@ error2hangdump = executable(
 intel_hang_replay = executable(
   'intel_hang_replay',
   files('intel_hang_replay.c'),
+  files('intel_hang_replay_lib.c'),
+  files('intel_hang_replay_lib.h'),
+  files('intel_hang_replay_xe.c'),
+  files('intel_hang_replay_xe.h'),
   dependencies : [idep_intel_dev, idep_libintel_common, dep_libdrm, dep_dl, dep_thread, dep_m,
                   idep_libintel_tools],
   include_directories : [inc_include, inc_src, inc_intel],
@@ -195,7 +201,19 @@ if with_tools.contains('intel-ui')
   aubinator_viewer = executable(
     'aubinator_viewer',
     files('aubinator_viewer.cpp', 'aubinator_viewer_decoder.cpp'),
-    dependencies : [idep_mesautil, dep_zlib, dep_dl, dep_thread, dep_m, libintel_imgui_gtk_dep, idep_intel_dev,
+    dependencies : [idep_mesautil, dep_zlib, dep_dl, dep_thread, dep_m, libintel_imgui_dep, idep_intel_dev,
+                    idep_libintel_common, idep_libintel_tools],
+    include_directories : [inc_include, inc_src, inc_intel],
+    c_args : [no_override_init_args],
+    gnu_symbol_visibility : 'hidden',
+    cpp_args : cpp.get_supported_arguments('-fpermissive', '-Wno-parentheses', '-Wno-error=stringop-overflow'),
+    install : true
+  )
+
+  intel_eu_stall_viewer = executable(
+    'intel_eu_stall_viewer',
+    files('intel_eu_stall_viewer.cpp'),
+    dependencies : [idep_mesautil, dep_zlib, dep_dl, dep_thread, dep_m, libintel_imgui_dep, idep_intel_dev,
                     idep_libintel_common, idep_libintel_tools],
     include_directories : [inc_include, inc_src, inc_intel],
     c_args : [no_override_init_args],
@@ -213,7 +231,7 @@ if with_tools.contains('intel-ui')
       dep_dl,
       dep_thread,
       dep_m,
-      libintel_imgui_gtk_dep,
+      libintel_imgui_dep,
       idep_intel_dev,
       idep_libintel_common,
       idep_libintel_tools,

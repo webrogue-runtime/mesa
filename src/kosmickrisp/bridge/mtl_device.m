@@ -129,6 +129,38 @@ mtl_device_max_threads_per_threadgroup(mtl_device *dev)
    }
 }
 
+uint32_t
+mtl_device_max_threadgroup_memory_length(mtl_device *dev)
+{
+   @autoreleasepool {
+      id<MTLDevice> device = (id<MTLDevice>)dev;
+      return device.maxThreadgroupMemoryLength;
+   }
+}
+
+uint64_t
+mtl_device_max_buffer_length(mtl_device *dev)
+{
+   @autoreleasepool {
+      id<MTLDevice> device = (id<MTLDevice>)dev;
+      return device.maxBufferLength;
+   }
+}
+
+/* Timestamp query */
+uint64_t
+mtl_device_get_gpu_timestamp(mtl_device *dev)
+{
+   @autoreleasepool {
+      id<MTLDevice> device = (id<MTLDevice>)dev;
+      MTLTimestamp cpu_ts, gpu_ts;
+
+      [device sampleTimestamps:&cpu_ts gpuTimestamp:&gpu_ts];
+
+      return (uint64_t)gpu_ts;
+   }
+}
+
 /* Resource queries */
 /* TODO_KOSMICKRISP Return a struct */
 void

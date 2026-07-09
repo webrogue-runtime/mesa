@@ -17,12 +17,6 @@ radv_entrypoints_gen_command += [
   '--device-prefix', 'rmv',
   '--device-prefix', 'ctx_roll',
 
-  # Application layer entrypoints
-  '--device-prefix', 'metro_exodus',
-  '--device-prefix', 'rage2',
-  '--device-prefix', 'quantic_dream',
-  '--device-prefix', 'no_mans_sky',
-
   # Command buffer annotation layer entrypoints
   '--device-prefix', 'annotate',
 ]
@@ -37,11 +31,8 @@ radv_entrypoints = custom_target(
 
 libradv_files = files(
   'bvh/bvh.h',
+  'layers/radv_app_workarounds.c',
   'layers/radv_ctx_roll_layer.c',
-  'layers/radv_metro_exodus.c',
-  'layers/radv_rage2.c',
-  'layers/radv_quantic_dream.c',
-  'layers/radv_no_mans_sky.c',
   'layers/radv_rmv_layer.c',
   'layers/radv_rra_layer.c',
   'layers/radv_sqtt_layer.c',
@@ -55,6 +46,8 @@ libradv_files = files(
   'meta/radv_meta_clear.c',
   'meta/radv_meta_clear_hiz.c',
   'meta/radv_meta_copy.c',
+  'meta/radv_meta_copy_indirect_cs.c',
+  'meta/radv_meta_copy_indirect_fs.c',
   'meta/radv_meta_copy_vrs_htile.c',
   'meta/radv_meta_dcc_retile.c',
   'meta/radv_meta_decompress.c',
@@ -68,10 +61,11 @@ libradv_files = files(
   'nir/radv_meta_nir.c',
   'nir/radv_meta_nir.h',
   'nir/radv_nir.h',
-  'nir/radv_nir_apply_pipeline_layout.c',
   'nir/radv_nir_export_multiview.c',
   'nir/radv_nir_lower_abi.c',
+  'nir/radv_nir_lower_call_abi.c',
   'nir/radv_nir_lower_cooperative_matrix.c',
+  'nir/radv_nir_lower_descriptors.c',
   'nir/radv_nir_lower_fs_barycentric.c',
   'nir/radv_nir_lower_fs_intrinsics.c',
   'nir/radv_nir_lower_hit_attrib_derefs.c',
@@ -82,13 +76,17 @@ libradv_files = files(
   'nir/radv_nir_lower_printf.c',
   'nir/radv_nir_lower_ray_queries.c',
   'nir/radv_nir_lower_view_index.c',
-  'nir/radv_nir_lower_viewport_to_zero.c',
   'nir/radv_nir_lower_vs_inputs.c',
   'nir/radv_nir_opt_fs_builtins.c',
   'nir/radv_nir_opt_tid_function.c',
   'nir/radv_nir_remap_color_attachment.c',
   'nir/radv_nir_rt_common.c',
-  'nir/radv_nir_rt_shader.c',
+  'nir/radv_nir_rt_stage_common.c',
+  'nir/radv_nir_rt_stage_cps.c',
+  'nir/radv_nir_rt_stage_functions.c',
+  'nir/radv_nir_rt_stage_monolithic.c',
+  'nir/radv_nir_rt_traversal_shader.c',
+  'nir/radv_nir_trim_fs_color_exports.c',
   'radv_acceleration_structure.c',
   'radv_android.c',
   'radv_android.h',
@@ -250,7 +248,7 @@ libvulkan_radeon = shared_library(
     dep_llvm, dep_libdrm_amdgpu, dep_thread, dep_elf, dep_dl, dep_m,
     dep_valgrind, radv_deps, idep_aco,
     idep_mesautil, idep_nir, idep_vulkan_util, idep_vulkan_wsi,
-    idep_vulkan_runtime, idep_amdgfxregs_h, idep_xmlconfig,
+    idep_vulkan_runtime, idep_amd_generated_headers, idep_xmlconfig,
   ],
   c_args : [no_override_init_args, radv_flags, c_msvc_compat_args],
   cpp_args : [radv_flags, cpp_msvc_compat_args],
@@ -319,8 +317,6 @@ _dev_icd = custom_target(
 )
 
 devenv.append('VK_DRIVER_FILES', _dev_icd.full_path())
-# Deprecated: replaced by VK_DRIVER_FILES above
-devenv.append('VK_ICD_FILENAMES', _dev_icd.full_path())
 
 if with_radv_tests
   test(

@@ -1187,10 +1187,24 @@ alu_width_cb(const nir_instr *instr, UNUSED const void *cb_data)
    if (instr->type == nir_instr_type_alu) {
       nir_alu_instr *alu = nir_instr_as_alu(instr);
 
-      if (alu->op == nir_op_fdot2 ||
-          alu->op == nir_op_fdot3 ||
-          alu->op == nir_op_fdot4)
-         return 0;
+      switch (alu->op) {
+      case nir_op_ball_fequal2:
+      case nir_op_ball_fequal3:
+      case nir_op_ball_fequal4:
+      case nir_op_bany_fnequal2:
+      case nir_op_bany_fnequal3:
+      case nir_op_bany_fnequal4:
+      case nir_op_ball_iequal2:
+      case nir_op_ball_iequal3:
+      case nir_op_ball_iequal4:
+      case nir_op_bany_inequal2:
+      case nir_op_bany_inequal3:
+      case nir_op_bany_inequal4: return 1;
+      case nir_op_fdot2:
+      case nir_op_fdot3:
+      case nir_op_fdot4: return 0;
+      default: break;
+      }
    }
 
    return 4;
@@ -1327,7 +1341,7 @@ etna_compile_shader(struct etna_shader_variant *v)
    NIR_PASS(_, s, nir_opt_dce);
    NIR_PASS(_, s, nir_opt_cse);
 
-   NIR_PASS(_, s, nir_lower_bool_to_bitsize);
+   NIR_PASS(_, s, nir_lower_bool_to_int32);
    NIR_PASS(_, s, etna_lower_alu, c->specs->has_new_transcendentals);
 
    /* needs to be the last pass that touches pass_flags! */
