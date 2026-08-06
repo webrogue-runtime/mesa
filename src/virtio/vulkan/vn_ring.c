@@ -5,7 +5,7 @@
 
 #include "vn_ring.h"
 
-#if !DETECT_OS_WINDOWS
+#if !DETECT_OS_WINDOWS && !DETECT_OS_WASI
 #include <sys/resource.h>
 #endif
 
@@ -332,13 +332,13 @@ vn_ring_create(struct vn_instance *instance,
     * VK_MESA_VENUS_PROTOCOL_SPEC_VERSION >= 2  */
    int prio = 0;
    bool ring_priority = false;
-#if !DETECT_OS_WINDOWS
+#if !DETECT_OS_WINDOWS && !DETECT_OS_WASI
    if (instance->renderer->info.vk_mesa_venus_protocol_spec_version >= 2) {
       errno = 0;
       prio = getpriority(PRIO_PROCESS, 0);
       ring_priority = is_tls_ring && !(prio == -1 && errno);
    }
-#endif /* !DETECT_OS_WINDOWS */
+#endif /* !DETECT_OS_WINDOWS && !DETECT_OS_WASI */
    const struct VkRingPriorityInfoMESA priority_info = {
       .sType = VK_STRUCTURE_TYPE_RING_PRIORITY_INFO_MESA,
       .priority = prio,

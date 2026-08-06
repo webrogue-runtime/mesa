@@ -1658,6 +1658,11 @@ vn_CreateFence(VkDevice device,
       vk_find_struct_const(pCreateInfo->pNext, EXPORT_FENCE_CREATE_INFO);
    fence->is_external = export_info && export_info->handleTypes;
 
+#if DETECT_OS_WASI
+   *pFence = vn_fence_to_handle(fence);
+   result = vn_call_vkCreateFence(dev->primary_ring, device, pCreateInfo, NULL,
+                                  pFence);
+#else
    result = vn_fence_init_payloads(dev, fence, signaled, alloc);
    if (result != VK_SUCCESS)
       goto out_object_base_fini;
@@ -1669,6 +1674,9 @@ vn_CreateFence(VkDevice device,
    *pFence = vn_fence_to_handle(fence);
    vn_async_vkCreateFence(dev->primary_ring, device, pCreateInfo, NULL,
                           pFence);
+#endif
+   if (result != VK_SUCCESS)
+      goto out_object_base_fini;
 
    return VK_SUCCESS;
 
@@ -1711,6 +1719,14 @@ VKAPI_ATTR VkResult VKAPI_CALL
 vn_ResetFences(VkDevice device, uint32_t fenceCount, const VkFence *pFences)
 {
    VN_TRACE_FUNC();
+#if DETECT_OS_WASI
+   struct vn_device *dev = vn_device_from_handle(device);
+   VkResult result = vn_call_vkResetFences(dev->primary_ring, device,
+                                           fenceCount, pFences);
+   if (result != VK_SUCCESS)
+      return vn_error(dev->instance, result);
+   return VK_SUCCESS;
+#else
    struct vn_device *dev = vn_device_from_handle(device);
 
    vn_async_vkResetFences(dev->primary_ring, device, fenceCount, pFences);
@@ -1731,6 +1747,7 @@ vn_ResetFences(VkDevice device, uint32_t fenceCount, const VkFence *pFences)
    }
 
    return VK_SUCCESS;
+#endif
 }
 
 static VkResult
@@ -1738,6 +1755,7 @@ vn_get_fence_status(VkDevice dev_handle,
                     VkFence fence_handle,
                     struct vn_relax_state *relax_state)
 {
+   abort();
    struct vn_device *dev = vn_device_from_handle(dev_handle);
    struct vn_fence *fence = vn_fence_from_handle(fence_handle);
    struct vn_sync_payload *payload = fence->payload;
@@ -1783,10 +1801,14 @@ vn_get_fence_status(VkDevice dev_handle,
       }
       break;
    case VN_SYNC_TYPE_IMPORTED_SYNC_FD:
+#if DETECT_OS_WASI
+      abort();
+#else
       if (payload->fd < 0 || sync_wait(payload->fd, 0) == 0)
          result = VK_SUCCESS;
       else
          result = errno == ETIME ? VK_NOT_READY : VK_ERROR_DEVICE_LOST;
+#endif
       break;
    default:
       UNREACHABLE("unexpected fence payload type");
@@ -1799,9 +1821,16 @@ vn_get_fence_status(VkDevice dev_handle,
 VKAPI_ATTR VkResult VKAPI_CALL
 vn_GetFenceStatus(VkDevice device, VkFence fence)
 {
+#if DETECT_OS_WASI
+
+   struct vn_device *dev = vn_device_from_handle(device);
+   VkResult result = vn_call_vkGetFenceStatus(dev->primary_ring, device, fence);
+   return vn_result(dev->instance, result);
+#else
    struct vn_device *dev = vn_device_from_handle(device);
    VkResult result = vn_get_fence_status(device, fence, NULL);
    return vn_result(dev->instance, result);
+#endif
 }
 
 static VkResult
@@ -1868,6 +1897,13 @@ vn_WaitForFences(VkDevice device,
                  uint64_t timeout)
 {
    VN_TRACE_FUNC();
+#if DETECT_OS_WASI
+   struct vn_device *dev = vn_device_from_handle(device);
+   VkResult result =
+      vn_call_vkWaitForFences(dev->primary_ring, device, fenceCount, pFences,
+                              waitAll, timeout);
+   return vn_result(dev->instance, result);
+#else
    struct vn_device *dev = vn_device_from_handle(device);
 
    const int64_t abs_timeout = os_time_get_absolute_timeout(timeout);
@@ -1900,6 +1936,7 @@ vn_WaitForFences(VkDevice device,
    }
 
    return vn_result(dev->instance, result);
+#endif
 }
 
 static VkResult
@@ -1950,10 +1987,14 @@ vn_create_sync_file(struct vn_device *dev,
 static inline bool
 vn_sync_valid_fd(int fd)
 {
+#if DETECT_OS_WASI
+   abort();
+#else
    /* the special value -1 for fd is treated like a valid sync file descriptor
     * referring to an object that has already signaled
     */
    return (fd >= 0 && sync_valid_fd(fd)) || fd == -1;
+#endif
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL
@@ -2051,8 +2092,12 @@ vn_semaphore_wait_external(struct vn_device *dev, struct vn_semaphore *sem)
    assert(temp->type == VN_SYNC_TYPE_IMPORTED_SYNC_FD);
 
    if (temp->fd >= 0) {
+#if DETECT_OS_WASI
+      abort();
+#else
       if (sync_wait(temp->fd, -1))
          return false;
+#endif
    }
 
    vn_sync_payload_release(dev, &sem->temporary);
@@ -2354,10 +2399,17 @@ vn_GetSemaphoreCounterValue(VkDevice device,
                             VkSemaphore semaphore,
                             uint64_t *pValue)
 {
+#if DETECT_OS_WASI
+   struct vn_device *dev = vn_device_from_handle(device);
+   VkResult result = vn_call_vkGetSemaphoreCounterValue(
+      dev->primary_ring, device, semaphore, pValue);
+   return vn_result(dev->instance, result);
+#else
    struct vn_device *dev = vn_device_from_handle(device);
    VkResult result =
       vn_get_semaphore_counter_value(device, semaphore, NULL, pValue);
    return vn_result(dev->instance, result);
+#endif
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL
@@ -2435,6 +2487,12 @@ vn_WaitSemaphores(VkDevice device,
                   uint64_t timeout)
 {
    VN_TRACE_FUNC();
+#if DETECT_OS_WASI
+   struct vn_device *dev = vn_device_from_handle(device);
+   VkResult result = vn_call_vkWaitSemaphores(
+      dev->primary_ring, device, pWaitInfo, timeout);
+   return vn_result(dev->instance, result);
+#else
    struct vn_device *dev = vn_device_from_handle(device);
 
    const int64_t abs_timeout = os_time_get_absolute_timeout(timeout);
@@ -2473,6 +2531,7 @@ vn_WaitSemaphores(VkDevice device,
    }
 
    return vn_result(dev->instance, result);
+#endif
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL
@@ -2650,6 +2709,12 @@ VKAPI_ATTR VkResult VKAPI_CALL
 vn_GetEventStatus(VkDevice device, VkEvent event)
 {
    VN_TRACE_FUNC();
+#if DETECT_OS_WASI
+   struct vn_device *dev = vn_device_from_handle(device);
+   VkResult result =
+      vn_call_vkGetEventStatus(dev->primary_ring, device, event);
+   return vn_result(dev->instance, result);
+#else
    struct vn_device *dev = vn_device_from_handle(device);
    struct vn_event *ev = vn_event_from_handle(event);
    VkResult result;
@@ -2660,12 +2725,20 @@ vn_GetEventStatus(VkDevice device, VkEvent event)
       result = vn_call_vkGetEventStatus(dev->primary_ring, device, event);
 
    return vn_result(dev->instance, result);
+#endif
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL
 vn_SetEvent(VkDevice device, VkEvent event)
 {
    VN_TRACE_FUNC();
+#if DETECT_OS_WASI
+   struct vn_device *dev = vn_device_from_handle(device);
+   VkResult result = vn_call_vkSetEvent(dev->primary_ring, device, event);
+   if (result != VK_SUCCESS)
+      return vn_error(dev->instance, result);
+   return VK_SUCCESS;
+#else
    struct vn_device *dev = vn_device_from_handle(device);
    struct vn_event *ev = vn_event_from_handle(event);
 
@@ -2679,12 +2752,21 @@ vn_SetEvent(VkDevice device, VkEvent event)
    }
 
    return VK_SUCCESS;
+#endif
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL
 vn_ResetEvent(VkDevice device, VkEvent event)
 {
    VN_TRACE_FUNC();
+#if DETECT_OS_WASI
+   struct vn_device *dev = vn_device_from_handle(device);
+   VkResult result =
+      vn_call_vkResetEvent(dev->primary_ring, device, event);
+   if (result != VK_SUCCESS)
+      return vn_error(dev->instance, result);
+   return VK_SUCCESS;
+#else
    struct vn_device *dev = vn_device_from_handle(device);
    struct vn_event *ev = vn_event_from_handle(event);
 
@@ -2699,4 +2781,5 @@ vn_ResetEvent(VkDevice device, VkEvent event)
    }
 
    return VK_SUCCESS;
+#endif
 }

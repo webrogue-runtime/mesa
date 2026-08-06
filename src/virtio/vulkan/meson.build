@@ -107,8 +107,15 @@ vn_link_args = [
 
 vn_libs = []
 
-if not with_platform_windows
+if not with_platform_windows and not with_platform_webrogue
   libvn_files += files('vn_renderer_vtest.c')
+endif
+
+if with_platform_webrogue
+  libvn_files += files(
+    'vn_webrogue.c',
+    'vn_renderer_webrogue.c',
+  )
 endif
 
 if system_has_kms_drm
@@ -123,6 +130,8 @@ if with_platform_wayland or with_platform_x11 or \
   vn_c_args += '-DVN_USE_WSI_PLATFORM'
 endif
 
+
+
 if with_platform_wayland
   vn_deps += dep_wayland_client
 endif
@@ -136,7 +145,7 @@ if with_platform_android
   vn_deps += [dep_android, idep_u_gralloc]
 endif
 
-libvulkan_virtio = shared_library(
+libvulkan_virtio = static_library(
   'vulkan_virtio',
   [libvn_files, vn_entrypoints, sha1_h],
   include_directories : vn_incs,

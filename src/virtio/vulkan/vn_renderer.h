@@ -241,6 +241,13 @@ vn_renderer_create_vtest(struct vn_instance *instance,
                          const VkAllocationCallbacks *alloc,
                          struct vn_renderer **renderer);
 
+#if DETECT_OS_WASI       
+VkResult
+vn_renderer_create_webrogue(struct vn_instance *instance,
+                            const VkAllocationCallbacks *alloc,
+                            struct vn_renderer **renderer);
+#endif
+
 static inline VkResult
 vn_renderer_create(struct vn_instance *instance,
                    const VkAllocationCallbacks *alloc,
@@ -254,6 +261,8 @@ vn_renderer_create(struct vn_instance *instance,
    }
 
    return vn_renderer_create_virtgpu(instance, alloc, renderer);
+#elif DETECT_OS_WASI    
+   return vn_renderer_create_webrogue(instance, alloc, renderer);
 #else
    return vn_renderer_create_vtest(instance, alloc, renderer);
 #endif

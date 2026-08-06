@@ -1250,7 +1250,7 @@ vn_physical_device_get_native_extensions(
    exts->KHR_deferred_host_operations =
       physical_dev->ray_tracing && renderer_exts->KHR_acceleration_structure;
    exts->KHR_map_memory2 = true;
-#if !DETECT_OS_WINDOWS
+#if !DETECT_OS_WINDOWS && !DETECT_OS_WASI
    exts->EXT_map_memory_placed = true;
    exts->EXT_physical_device_drm = true;
 #endif
@@ -1469,6 +1469,9 @@ vn_physical_device_get_passthrough_extensions(
       .IMG_filter_cubic = true,
       .NV_compute_shader_derivatives = true,
       .VALVE_mutable_descriptor_type = true,
+#if DETECT_OS_WASI
+      .KHR_swapchain = true,
+#endif
    };
 }
 
@@ -1886,8 +1889,18 @@ enumerate_physical_devices(struct vn_instance *instance,
       struct vk_physical_device_dispatch_table dispatch_table;
       vk_physical_device_dispatch_table_from_entrypoints(
          &dispatch_table, &vn_physical_device_entrypoints, true);
+#if DETECT_OS_WASI
+      // WASM weak static linking bug workaround
+      if(dispatch_table.CreateDevice == NULL) {
+         abort();
+      } else {
+         assert(dispatch_table.CreateDevice == vn_CreateDevice);
+         dispatch_table.CreateDevice = vn_CreateDevice;
+      }
+#else
       vk_physical_device_dispatch_table_from_entrypoints(
          &dispatch_table, &wsi_physical_device_entrypoints, false);
+#endif
       result = vn_physical_device_base_init(
          &physical_dev->base, &instance->base, NULL, &dispatch_table);
       if (result != VK_SUCCESS) {

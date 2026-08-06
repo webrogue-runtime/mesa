@@ -783,6 +783,217 @@ vn_encode_VkBindSparseInfo(struct vn_cs_encoder *enc, const VkBindSparseInfo *va
     vn_encode_VkBindSparseInfo_self(enc, val);
 }
 
+/* struct VkDeviceGroupPresentInfoKHR chain */
+
+static inline size_t
+vn_sizeof_VkDeviceGroupPresentInfoKHR_pnext(const void *val)
+{
+    /* no known/supported struct */
+    return vn_sizeof_simple_pointer(NULL);
+}
+
+static inline size_t
+vn_sizeof_VkDeviceGroupPresentInfoKHR_self(const VkDeviceGroupPresentInfoKHR *val)
+{
+    size_t size = 0;
+    /* skip val->{sType,pNext} */
+    size += vn_sizeof_uint32_t(&val->swapchainCount);
+    if (val->pDeviceMasks) {
+        size += vn_sizeof_array_size(val->swapchainCount);
+        size += vn_sizeof_uint32_t_array(val->pDeviceMasks, val->swapchainCount);
+    } else {
+        size += vn_sizeof_array_size(0);
+    }
+    size += vn_sizeof_VkDeviceGroupPresentModeFlagBitsKHR(&val->mode);
+    return size;
+}
+
+static inline size_t
+vn_sizeof_VkDeviceGroupPresentInfoKHR(const VkDeviceGroupPresentInfoKHR *val)
+{
+    size_t size = 0;
+
+    size += vn_sizeof_VkStructureType(&val->sType);
+    size += vn_sizeof_VkDeviceGroupPresentInfoKHR_pnext(val->pNext);
+    size += vn_sizeof_VkDeviceGroupPresentInfoKHR_self(val);
+
+    return size;
+}
+
+static inline void
+vn_encode_VkDeviceGroupPresentInfoKHR_pnext(struct vn_cs_encoder *enc, const void *val)
+{
+    /* no known/supported struct */
+    vn_encode_simple_pointer(enc, NULL);
+}
+
+static inline void
+vn_encode_VkDeviceGroupPresentInfoKHR_self(struct vn_cs_encoder *enc, const VkDeviceGroupPresentInfoKHR *val)
+{
+    /* skip val->{sType,pNext} */
+    vn_encode_uint32_t(enc, &val->swapchainCount);
+    if (val->pDeviceMasks) {
+        vn_encode_array_size(enc, val->swapchainCount);
+        vn_encode_uint32_t_array(enc, val->pDeviceMasks, val->swapchainCount);
+    } else {
+        vn_encode_array_size(enc, 0);
+    }
+    vn_encode_VkDeviceGroupPresentModeFlagBitsKHR(enc, &val->mode);
+}
+
+static inline void
+vn_encode_VkDeviceGroupPresentInfoKHR(struct vn_cs_encoder *enc, const VkDeviceGroupPresentInfoKHR *val)
+{
+    assert(val->sType == VK_STRUCTURE_TYPE_DEVICE_GROUP_PRESENT_INFO_KHR);
+    vn_encode_VkStructureType(enc, &(VkStructureType){ VK_STRUCTURE_TYPE_DEVICE_GROUP_PRESENT_INFO_KHR });
+    vn_encode_VkDeviceGroupPresentInfoKHR_pnext(enc, val->pNext);
+    vn_encode_VkDeviceGroupPresentInfoKHR_self(enc, val);
+}
+
+/* struct VkPresentInfoKHR chain */
+
+static inline size_t
+vn_sizeof_VkPresentInfoKHR_pnext(const void *val)
+{
+    const VkBaseInStructure *pnext = val;
+    size_t size = 0;
+
+    while (pnext) {
+        switch ((int32_t)pnext->sType) {
+        case VK_STRUCTURE_TYPE_DEVICE_GROUP_PRESENT_INFO_KHR:
+            if (!vn_cs_renderer_protocol_has_extension(2 /* VK_KHR_swapchain */) && !(vn_cs_renderer_protocol_has_extension(61 /* VK_KHR_device_group */) && vn_cs_renderer_protocol_has_extension(2 /* VK_KHR_swapchain */)))
+                break;
+            size += vn_sizeof_simple_pointer(pnext);
+            size += vn_sizeof_VkStructureType(&pnext->sType);
+            size += vn_sizeof_VkPresentInfoKHR_pnext(((const VkDeviceGroupPresentInfoKHR *)pnext)->pNext);
+            size += vn_sizeof_VkDeviceGroupPresentInfoKHR_self((const VkDeviceGroupPresentInfoKHR *)pnext);
+            return size;
+        default:
+            /* ignore unknown/unsupported struct */
+            break;
+        }
+        pnext = pnext->pNext;
+    }
+
+    return vn_sizeof_simple_pointer(NULL);
+}
+
+static inline size_t
+vn_sizeof_VkPresentInfoKHR_self(const VkPresentInfoKHR *val)
+{
+    size_t size = 0;
+    /* skip val->{sType,pNext} */
+    size += vn_sizeof_uint32_t(&val->waitSemaphoreCount);
+    if (val->pWaitSemaphores) {
+        size += vn_sizeof_array_size(val->waitSemaphoreCount);
+        for (uint32_t i = 0; i < val->waitSemaphoreCount; i++)
+            size += vn_sizeof_VkSemaphore(&val->pWaitSemaphores[i]);
+    } else {
+        size += vn_sizeof_array_size(0);
+    }
+    size += vn_sizeof_uint32_t(&val->swapchainCount);
+    if (val->pSwapchains) {
+        size += vn_sizeof_array_size(val->swapchainCount);
+        for (uint32_t i = 0; i < val->swapchainCount; i++)
+            size += vn_sizeof_VkSwapchainKHR(&val->pSwapchains[i]);
+    } else {
+        size += vn_sizeof_array_size(0);
+    }
+    if (val->pImageIndices) {
+        size += vn_sizeof_array_size(val->swapchainCount);
+        size += vn_sizeof_uint32_t_array(val->pImageIndices, val->swapchainCount);
+    } else {
+        size += vn_sizeof_array_size(0);
+    }
+    if (val->pResults) {
+        size += vn_sizeof_array_size(val->swapchainCount);
+        size += vn_sizeof_VkResult_array(val->pResults, val->swapchainCount);
+    } else {
+        size += vn_sizeof_array_size(0);
+    }
+    return size;
+}
+
+static inline size_t
+vn_sizeof_VkPresentInfoKHR(const VkPresentInfoKHR *val)
+{
+    size_t size = 0;
+
+    size += vn_sizeof_VkStructureType(&val->sType);
+    size += vn_sizeof_VkPresentInfoKHR_pnext(val->pNext);
+    size += vn_sizeof_VkPresentInfoKHR_self(val);
+
+    return size;
+}
+
+static inline void
+vn_encode_VkPresentInfoKHR_pnext(struct vn_cs_encoder *enc, const void *val)
+{
+    const VkBaseInStructure *pnext = val;
+
+    while (pnext) {
+        switch ((int32_t)pnext->sType) {
+        case VK_STRUCTURE_TYPE_DEVICE_GROUP_PRESENT_INFO_KHR:
+            if (!vn_cs_renderer_protocol_has_extension(2 /* VK_KHR_swapchain */) && !(vn_cs_renderer_protocol_has_extension(61 /* VK_KHR_device_group */) && vn_cs_renderer_protocol_has_extension(2 /* VK_KHR_swapchain */)))
+                break;
+            vn_encode_simple_pointer(enc, pnext);
+            vn_encode_VkStructureType(enc, &pnext->sType);
+            vn_encode_VkPresentInfoKHR_pnext(enc, ((const VkDeviceGroupPresentInfoKHR *)pnext)->pNext);
+            vn_encode_VkDeviceGroupPresentInfoKHR_self(enc, (const VkDeviceGroupPresentInfoKHR *)pnext);
+            return;
+        default:
+            /* ignore unknown/unsupported struct */
+            break;
+        }
+        pnext = pnext->pNext;
+    }
+
+    vn_encode_simple_pointer(enc, NULL);
+}
+
+static inline void
+vn_encode_VkPresentInfoKHR_self(struct vn_cs_encoder *enc, const VkPresentInfoKHR *val)
+{
+    /* skip val->{sType,pNext} */
+    vn_encode_uint32_t(enc, &val->waitSemaphoreCount);
+    if (val->pWaitSemaphores) {
+        vn_encode_array_size(enc, val->waitSemaphoreCount);
+        for (uint32_t i = 0; i < val->waitSemaphoreCount; i++)
+            vn_encode_VkSemaphore(enc, &val->pWaitSemaphores[i]);
+    } else {
+        vn_encode_array_size(enc, 0);
+    }
+    vn_encode_uint32_t(enc, &val->swapchainCount);
+    if (val->pSwapchains) {
+        vn_encode_array_size(enc, val->swapchainCount);
+        for (uint32_t i = 0; i < val->swapchainCount; i++)
+            vn_encode_VkSwapchainKHR(enc, &val->pSwapchains[i]);
+    } else {
+        vn_encode_array_size(enc, 0);
+    }
+    if (val->pImageIndices) {
+        vn_encode_array_size(enc, val->swapchainCount);
+        vn_encode_uint32_t_array(enc, val->pImageIndices, val->swapchainCount);
+    } else {
+        vn_encode_array_size(enc, 0);
+    }
+    if (val->pResults) {
+        vn_encode_array_size(enc, val->swapchainCount);
+        vn_encode_VkResult_array(enc, val->pResults, val->swapchainCount);
+    } else {
+        vn_encode_array_size(enc, 0);
+    }
+}
+
+static inline void
+vn_encode_VkPresentInfoKHR(struct vn_cs_encoder *enc, const VkPresentInfoKHR *val)
+{
+    assert(val->sType == VK_STRUCTURE_TYPE_PRESENT_INFO_KHR);
+    vn_encode_VkStructureType(enc, &(VkStructureType){ VK_STRUCTURE_TYPE_PRESENT_INFO_KHR });
+    vn_encode_VkPresentInfoKHR_pnext(enc, val->pNext);
+    vn_encode_VkPresentInfoKHR_self(enc, val);
+}
+
 /* struct VkSemaphoreSubmitInfo chain */
 
 static inline size_t
@@ -1184,6 +1395,59 @@ static inline VkResult vn_decode_vkQueueBindSparse_reply(struct vn_cs_decoder *d
     return ret;
 }
 
+static inline size_t vn_sizeof_vkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPresentInfo)
+{
+    const VkCommandTypeEXT cmd_type = VK_COMMAND_TYPE_vkQueuePresentKHR_EXT;
+    const VkFlags cmd_flags = 0;
+    size_t cmd_size = vn_sizeof_VkCommandTypeEXT(&cmd_type) + vn_sizeof_VkFlags(&cmd_flags);
+
+    cmd_size += vn_sizeof_VkQueue(&queue);
+    cmd_size += vn_sizeof_simple_pointer(pPresentInfo);
+    if (pPresentInfo)
+        cmd_size += vn_sizeof_VkPresentInfoKHR(pPresentInfo);
+
+    return cmd_size;
+}
+
+static inline void vn_encode_vkQueuePresentKHR(struct vn_cs_encoder *enc, VkCommandFlagsEXT cmd_flags, VkQueue queue, const VkPresentInfoKHR* pPresentInfo)
+{
+    const VkCommandTypeEXT cmd_type = VK_COMMAND_TYPE_vkQueuePresentKHR_EXT;
+
+    vn_encode_VkCommandTypeEXT(enc, &cmd_type);
+    vn_encode_VkFlags(enc, &cmd_flags);
+
+    vn_encode_VkQueue(enc, &queue);
+    if (vn_encode_simple_pointer(enc, pPresentInfo))
+        vn_encode_VkPresentInfoKHR(enc, pPresentInfo);
+}
+
+static inline size_t vn_sizeof_vkQueuePresentKHR_reply(VkQueue queue, const VkPresentInfoKHR* pPresentInfo)
+{
+    const VkCommandTypeEXT cmd_type = VK_COMMAND_TYPE_vkQueuePresentKHR_EXT;
+    size_t cmd_size = vn_sizeof_VkCommandTypeEXT(&cmd_type);
+
+    VkResult ret;
+    cmd_size += vn_sizeof_VkResult(&ret);
+    /* skip queue */
+    /* skip pPresentInfo */
+
+    return cmd_size;
+}
+
+static inline VkResult vn_decode_vkQueuePresentKHR_reply(struct vn_cs_decoder *dec, VkQueue queue, const VkPresentInfoKHR* pPresentInfo)
+{
+    VkCommandTypeEXT command_type;
+    vn_decode_VkCommandTypeEXT(dec, &command_type);
+    assert(command_type == VK_COMMAND_TYPE_vkQueuePresentKHR_EXT);
+
+    VkResult ret;
+    vn_decode_VkResult(dec, &ret);
+    /* skip queue */
+    /* skip pPresentInfo */
+
+    return ret;
+}
+
 static inline size_t vn_sizeof_vkQueueSubmit2(VkQueue queue, uint32_t submitCount, const VkSubmitInfo2* pSubmits, VkFence fence)
 {
     const VkCommandTypeEXT cmd_type = VK_COMMAND_TYPE_vkQueueSubmit2_EXT;
@@ -1317,6 +1581,27 @@ static inline void vn_submit_vkQueueBindSparse(struct vn_ring *vn_ring, VkComman
     }
 }
 
+static inline void vn_submit_vkQueuePresentKHR(struct vn_ring *vn_ring, VkCommandFlagsEXT cmd_flags, VkQueue queue, const VkPresentInfoKHR* pPresentInfo, struct vn_ring_submit_command *submit)
+{
+    uint8_t local_cmd_data[VN_SUBMIT_LOCAL_CMD_SIZE];
+    void *cmd_data = local_cmd_data;
+    size_t cmd_size = vn_sizeof_vkQueuePresentKHR(queue, pPresentInfo);
+    if (cmd_size > sizeof(local_cmd_data)) {
+        cmd_data = malloc(cmd_size);
+        if (!cmd_data)
+            cmd_size = 0;
+    }
+    const size_t reply_size = cmd_flags & VK_COMMAND_GENERATE_REPLY_BIT_EXT ? vn_sizeof_vkQueuePresentKHR_reply(queue, pPresentInfo) : 0;
+
+    struct vn_cs_encoder *enc = vn_ring_submit_command_init(vn_ring, submit, cmd_data, cmd_size, reply_size);
+    if (cmd_size) {
+        vn_encode_vkQueuePresentKHR(enc, cmd_flags, queue, pPresentInfo);
+        vn_ring_submit_command(vn_ring, submit);
+        if (cmd_data != local_cmd_data)
+            free(cmd_data);
+    }
+}
+
 static inline void vn_submit_vkQueueSubmit2(struct vn_ring *vn_ring, VkCommandFlagsEXT cmd_flags, VkQueue queue, uint32_t submitCount, const VkSubmitInfo2* pSubmits, VkFence fence, struct vn_ring_submit_command *submit)
 {
     uint8_t local_cmd_data[VN_SUBMIT_LOCAL_CMD_SIZE];
@@ -1402,6 +1687,28 @@ static inline void vn_async_vkQueueBindSparse(struct vn_ring *vn_ring, VkQueue q
 {
     struct vn_ring_submit_command submit;
     vn_submit_vkQueueBindSparse(vn_ring, 0, queue, bindInfoCount, pBindInfo, fence, &submit);
+}
+
+static inline VkResult vn_call_vkQueuePresentKHR(struct vn_ring *vn_ring, VkQueue queue, const VkPresentInfoKHR* pPresentInfo)
+{
+    VN_TRACE_FUNC();
+
+    struct vn_ring_submit_command submit;
+    vn_submit_vkQueuePresentKHR(vn_ring, VK_COMMAND_GENERATE_REPLY_BIT_EXT, queue, pPresentInfo, &submit);
+    struct vn_cs_decoder *dec = vn_ring_get_command_reply(vn_ring, &submit);
+    if (dec) {
+        const VkResult ret = vn_decode_vkQueuePresentKHR_reply(dec, queue, pPresentInfo);
+        vn_ring_free_command_reply(vn_ring, &submit);
+        return ret;
+    } else {
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+}
+
+static inline void vn_async_vkQueuePresentKHR(struct vn_ring *vn_ring, VkQueue queue, const VkPresentInfoKHR* pPresentInfo)
+{
+    struct vn_ring_submit_command submit;
+    vn_submit_vkQueuePresentKHR(vn_ring, 0, queue, pPresentInfo, &submit);
 }
 
 static inline VkResult vn_call_vkQueueSubmit2(struct vn_ring *vn_ring, VkQueue queue, uint32_t submitCount, const VkSubmitInfo2* pSubmits, VkFence fence)

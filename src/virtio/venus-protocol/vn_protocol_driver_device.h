@@ -24166,6 +24166,106 @@ vn_encode_VkDeviceCreateInfo(struct vn_cs_encoder *enc, const VkDeviceCreateInfo
     vn_encode_VkDeviceCreateInfo_self(enc, val);
 }
 
+/* struct VkSurfaceCapabilitiesKHR */
+
+static inline size_t
+vn_sizeof_VkSurfaceCapabilitiesKHR(const VkSurfaceCapabilitiesKHR *val)
+{
+    size_t size = 0;
+    size += vn_sizeof_uint32_t(&val->minImageCount);
+    size += vn_sizeof_uint32_t(&val->maxImageCount);
+    size += vn_sizeof_VkExtent2D(&val->currentExtent);
+    size += vn_sizeof_VkExtent2D(&val->minImageExtent);
+    size += vn_sizeof_VkExtent2D(&val->maxImageExtent);
+    size += vn_sizeof_uint32_t(&val->maxImageArrayLayers);
+    size += vn_sizeof_VkFlags(&val->supportedTransforms);
+    size += vn_sizeof_VkSurfaceTransformFlagBitsKHR(&val->currentTransform);
+    size += vn_sizeof_VkFlags(&val->supportedCompositeAlpha);
+    size += vn_sizeof_VkFlags(&val->supportedUsageFlags);
+    return size;
+}
+
+static inline void
+vn_decode_VkSurfaceCapabilitiesKHR(struct vn_cs_decoder *dec, VkSurfaceCapabilitiesKHR *val)
+{
+    vn_decode_uint32_t(dec, &val->minImageCount);
+    vn_decode_uint32_t(dec, &val->maxImageCount);
+    vn_decode_VkExtent2D(dec, &val->currentExtent);
+    vn_decode_VkExtent2D(dec, &val->minImageExtent);
+    vn_decode_VkExtent2D(dec, &val->maxImageExtent);
+    vn_decode_uint32_t(dec, &val->maxImageArrayLayers);
+    vn_decode_VkFlags(dec, &val->supportedTransforms);
+    vn_decode_VkSurfaceTransformFlagBitsKHR(dec, &val->currentTransform);
+    vn_decode_VkFlags(dec, &val->supportedCompositeAlpha);
+    vn_decode_VkFlags(dec, &val->supportedUsageFlags);
+}
+
+static inline size_t
+vn_sizeof_VkSurfaceCapabilitiesKHR_partial(const VkSurfaceCapabilitiesKHR *val)
+{
+    size_t size = 0;
+    /* skip val->minImageCount */
+    /* skip val->maxImageCount */
+    size += vn_sizeof_VkExtent2D_partial(&val->currentExtent);
+    size += vn_sizeof_VkExtent2D_partial(&val->minImageExtent);
+    size += vn_sizeof_VkExtent2D_partial(&val->maxImageExtent);
+    /* skip val->maxImageArrayLayers */
+    /* skip val->supportedTransforms */
+    /* skip val->currentTransform */
+    /* skip val->supportedCompositeAlpha */
+    /* skip val->supportedUsageFlags */
+    return size;
+}
+
+static inline void
+vn_encode_VkSurfaceCapabilitiesKHR_partial(struct vn_cs_encoder *enc, const VkSurfaceCapabilitiesKHR *val)
+{
+    /* skip val->minImageCount */
+    /* skip val->maxImageCount */
+    vn_encode_VkExtent2D_partial(enc, &val->currentExtent);
+    vn_encode_VkExtent2D_partial(enc, &val->minImageExtent);
+    vn_encode_VkExtent2D_partial(enc, &val->maxImageExtent);
+    /* skip val->maxImageArrayLayers */
+    /* skip val->supportedTransforms */
+    /* skip val->currentTransform */
+    /* skip val->supportedCompositeAlpha */
+    /* skip val->supportedUsageFlags */
+}
+
+/* struct VkSurfaceFormatKHR */
+
+static inline size_t
+vn_sizeof_VkSurfaceFormatKHR(const VkSurfaceFormatKHR *val)
+{
+    size_t size = 0;
+    size += vn_sizeof_VkFormat(&val->format);
+    size += vn_sizeof_VkColorSpaceKHR(&val->colorSpace);
+    return size;
+}
+
+static inline void
+vn_decode_VkSurfaceFormatKHR(struct vn_cs_decoder *dec, VkSurfaceFormatKHR *val)
+{
+    vn_decode_VkFormat(dec, &val->format);
+    vn_decode_VkColorSpaceKHR(dec, &val->colorSpace);
+}
+
+static inline size_t
+vn_sizeof_VkSurfaceFormatKHR_partial(const VkSurfaceFormatKHR *val)
+{
+    size_t size = 0;
+    /* skip val->format */
+    /* skip val->colorSpace */
+    return size;
+}
+
+static inline void
+vn_encode_VkSurfaceFormatKHR_partial(struct vn_cs_encoder *enc, const VkSurfaceFormatKHR *val)
+{
+    /* skip val->format */
+    /* skip val->colorSpace */
+}
+
 /* struct VkPhysicalDeviceMultiDrawPropertiesEXT chain */
 
 static inline size_t
@@ -36130,6 +36230,122 @@ vn_encode_VkPhysicalDeviceGroupProperties_partial(struct vn_cs_encoder *enc, con
     vn_encode_VkPhysicalDeviceGroupProperties_self_partial(enc, val);
 }
 
+/* struct VkDeviceGroupPresentCapabilitiesKHR chain */
+
+static inline size_t
+vn_sizeof_VkDeviceGroupPresentCapabilitiesKHR_pnext(const void *val)
+{
+    /* no known/supported struct */
+    return vn_sizeof_simple_pointer(NULL);
+}
+
+static inline size_t
+vn_sizeof_VkDeviceGroupPresentCapabilitiesKHR_self(const VkDeviceGroupPresentCapabilitiesKHR *val)
+{
+    size_t size = 0;
+    /* skip val->{sType,pNext} */
+    size += vn_sizeof_array_size(VK_MAX_DEVICE_GROUP_SIZE);
+    size += vn_sizeof_uint32_t_array(val->presentMask, VK_MAX_DEVICE_GROUP_SIZE);
+    size += vn_sizeof_VkFlags(&val->modes);
+    return size;
+}
+
+static inline size_t
+vn_sizeof_VkDeviceGroupPresentCapabilitiesKHR(const VkDeviceGroupPresentCapabilitiesKHR *val)
+{
+    size_t size = 0;
+
+    size += vn_sizeof_VkStructureType(&val->sType);
+    size += vn_sizeof_VkDeviceGroupPresentCapabilitiesKHR_pnext(val->pNext);
+    size += vn_sizeof_VkDeviceGroupPresentCapabilitiesKHR_self(val);
+
+    return size;
+}
+
+static inline void
+vn_decode_VkDeviceGroupPresentCapabilitiesKHR_pnext(struct vn_cs_decoder *dec, const void *val)
+{
+    /* no known/supported struct */
+    if (vn_decode_simple_pointer(dec))
+        assert(false);
+}
+
+static inline void
+vn_decode_VkDeviceGroupPresentCapabilitiesKHR_self(struct vn_cs_decoder *dec, VkDeviceGroupPresentCapabilitiesKHR *val)
+{
+    /* skip val->{sType,pNext} */
+    {
+        const size_t array_size = vn_decode_array_size(dec, VK_MAX_DEVICE_GROUP_SIZE);
+        vn_decode_uint32_t_array(dec, val->presentMask, array_size);
+    }
+    vn_decode_VkFlags(dec, &val->modes);
+}
+
+static inline void
+vn_decode_VkDeviceGroupPresentCapabilitiesKHR(struct vn_cs_decoder *dec, VkDeviceGroupPresentCapabilitiesKHR *val)
+{
+    VkStructureType stype;
+    vn_decode_VkStructureType(dec, &stype);
+    assert(stype == VK_STRUCTURE_TYPE_DEVICE_GROUP_PRESENT_CAPABILITIES_KHR);
+
+    assert(val->sType == stype);
+    vn_decode_VkDeviceGroupPresentCapabilitiesKHR_pnext(dec, val->pNext);
+    vn_decode_VkDeviceGroupPresentCapabilitiesKHR_self(dec, val);
+}
+
+static inline size_t
+vn_sizeof_VkDeviceGroupPresentCapabilitiesKHR_pnext_partial(const void *val)
+{
+    /* no known/supported struct */
+    return vn_sizeof_simple_pointer(NULL);
+}
+
+static inline size_t
+vn_sizeof_VkDeviceGroupPresentCapabilitiesKHR_self_partial(const VkDeviceGroupPresentCapabilitiesKHR *val)
+{
+    size_t size = 0;
+    /* skip val->{sType,pNext} */
+    /* skip val->presentMask */
+    /* skip val->modes */
+    return size;
+}
+
+static inline size_t
+vn_sizeof_VkDeviceGroupPresentCapabilitiesKHR_partial(const VkDeviceGroupPresentCapabilitiesKHR *val)
+{
+    size_t size = 0;
+
+    size += vn_sizeof_VkStructureType(&val->sType);
+    size += vn_sizeof_VkDeviceGroupPresentCapabilitiesKHR_pnext_partial(val->pNext);
+    size += vn_sizeof_VkDeviceGroupPresentCapabilitiesKHR_self_partial(val);
+
+    return size;
+}
+
+static inline void
+vn_encode_VkDeviceGroupPresentCapabilitiesKHR_pnext_partial(struct vn_cs_encoder *enc, const void *val)
+{
+    /* no known/supported struct */
+    vn_encode_simple_pointer(enc, NULL);
+}
+
+static inline void
+vn_encode_VkDeviceGroupPresentCapabilitiesKHR_self_partial(struct vn_cs_encoder *enc, const VkDeviceGroupPresentCapabilitiesKHR *val)
+{
+    /* skip val->{sType,pNext} */
+    /* skip val->presentMask */
+    /* skip val->modes */
+}
+
+static inline void
+vn_encode_VkDeviceGroupPresentCapabilitiesKHR_partial(struct vn_cs_encoder *enc, const VkDeviceGroupPresentCapabilitiesKHR *val)
+{
+    assert(val->sType == VK_STRUCTURE_TYPE_DEVICE_GROUP_PRESENT_CAPABILITIES_KHR);
+    vn_encode_VkStructureType(enc, &(VkStructureType){ VK_STRUCTURE_TYPE_DEVICE_GROUP_PRESENT_CAPABILITIES_KHR });
+    vn_encode_VkDeviceGroupPresentCapabilitiesKHR_pnext_partial(enc, val->pNext);
+    vn_encode_VkDeviceGroupPresentCapabilitiesKHR_self_partial(enc, val);
+}
+
 /* struct VkMultisamplePropertiesEXT chain */
 
 static inline size_t
@@ -36236,6 +36452,275 @@ vn_encode_VkMultisamplePropertiesEXT_partial(struct vn_cs_encoder *enc, const Vk
     vn_encode_VkStructureType(enc, &(VkStructureType){ VK_STRUCTURE_TYPE_MULTISAMPLE_PROPERTIES_EXT });
     vn_encode_VkMultisamplePropertiesEXT_pnext_partial(enc, val->pNext);
     vn_encode_VkMultisamplePropertiesEXT_self_partial(enc, val);
+}
+
+/* struct VkPhysicalDeviceSurfaceInfo2KHR chain */
+
+static inline size_t
+vn_sizeof_VkPhysicalDeviceSurfaceInfo2KHR_pnext(const void *val)
+{
+    /* no known/supported struct */
+    return vn_sizeof_simple_pointer(NULL);
+}
+
+static inline size_t
+vn_sizeof_VkPhysicalDeviceSurfaceInfo2KHR_self(const VkPhysicalDeviceSurfaceInfo2KHR *val)
+{
+    size_t size = 0;
+    /* skip val->{sType,pNext} */
+    size += vn_sizeof_VkSurfaceKHR(&val->surface);
+    return size;
+}
+
+static inline size_t
+vn_sizeof_VkPhysicalDeviceSurfaceInfo2KHR(const VkPhysicalDeviceSurfaceInfo2KHR *val)
+{
+    size_t size = 0;
+
+    size += vn_sizeof_VkStructureType(&val->sType);
+    size += vn_sizeof_VkPhysicalDeviceSurfaceInfo2KHR_pnext(val->pNext);
+    size += vn_sizeof_VkPhysicalDeviceSurfaceInfo2KHR_self(val);
+
+    return size;
+}
+
+static inline void
+vn_encode_VkPhysicalDeviceSurfaceInfo2KHR_pnext(struct vn_cs_encoder *enc, const void *val)
+{
+    /* no known/supported struct */
+    vn_encode_simple_pointer(enc, NULL);
+}
+
+static inline void
+vn_encode_VkPhysicalDeviceSurfaceInfo2KHR_self(struct vn_cs_encoder *enc, const VkPhysicalDeviceSurfaceInfo2KHR *val)
+{
+    /* skip val->{sType,pNext} */
+    vn_encode_VkSurfaceKHR(enc, &val->surface);
+}
+
+static inline void
+vn_encode_VkPhysicalDeviceSurfaceInfo2KHR(struct vn_cs_encoder *enc, const VkPhysicalDeviceSurfaceInfo2KHR *val)
+{
+    assert(val->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SURFACE_INFO_2_KHR);
+    vn_encode_VkStructureType(enc, &(VkStructureType){ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SURFACE_INFO_2_KHR });
+    vn_encode_VkPhysicalDeviceSurfaceInfo2KHR_pnext(enc, val->pNext);
+    vn_encode_VkPhysicalDeviceSurfaceInfo2KHR_self(enc, val);
+}
+
+/* struct VkSurfaceCapabilities2KHR chain */
+
+static inline size_t
+vn_sizeof_VkSurfaceCapabilities2KHR_pnext(const void *val)
+{
+    /* no known/supported struct */
+    return vn_sizeof_simple_pointer(NULL);
+}
+
+static inline size_t
+vn_sizeof_VkSurfaceCapabilities2KHR_self(const VkSurfaceCapabilities2KHR *val)
+{
+    size_t size = 0;
+    /* skip val->{sType,pNext} */
+    size += vn_sizeof_VkSurfaceCapabilitiesKHR(&val->surfaceCapabilities);
+    return size;
+}
+
+static inline size_t
+vn_sizeof_VkSurfaceCapabilities2KHR(const VkSurfaceCapabilities2KHR *val)
+{
+    size_t size = 0;
+
+    size += vn_sizeof_VkStructureType(&val->sType);
+    size += vn_sizeof_VkSurfaceCapabilities2KHR_pnext(val->pNext);
+    size += vn_sizeof_VkSurfaceCapabilities2KHR_self(val);
+
+    return size;
+}
+
+static inline void
+vn_decode_VkSurfaceCapabilities2KHR_pnext(struct vn_cs_decoder *dec, const void *val)
+{
+    /* no known/supported struct */
+    if (vn_decode_simple_pointer(dec))
+        assert(false);
+}
+
+static inline void
+vn_decode_VkSurfaceCapabilities2KHR_self(struct vn_cs_decoder *dec, VkSurfaceCapabilities2KHR *val)
+{
+    /* skip val->{sType,pNext} */
+    vn_decode_VkSurfaceCapabilitiesKHR(dec, &val->surfaceCapabilities);
+}
+
+static inline void
+vn_decode_VkSurfaceCapabilities2KHR(struct vn_cs_decoder *dec, VkSurfaceCapabilities2KHR *val)
+{
+    VkStructureType stype;
+    vn_decode_VkStructureType(dec, &stype);
+    assert(stype == VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_2_KHR);
+
+    assert(val->sType == stype);
+    vn_decode_VkSurfaceCapabilities2KHR_pnext(dec, val->pNext);
+    vn_decode_VkSurfaceCapabilities2KHR_self(dec, val);
+}
+
+static inline size_t
+vn_sizeof_VkSurfaceCapabilities2KHR_pnext_partial(const void *val)
+{
+    /* no known/supported struct */
+    return vn_sizeof_simple_pointer(NULL);
+}
+
+static inline size_t
+vn_sizeof_VkSurfaceCapabilities2KHR_self_partial(const VkSurfaceCapabilities2KHR *val)
+{
+    size_t size = 0;
+    /* skip val->{sType,pNext} */
+    size += vn_sizeof_VkSurfaceCapabilitiesKHR_partial(&val->surfaceCapabilities);
+    return size;
+}
+
+static inline size_t
+vn_sizeof_VkSurfaceCapabilities2KHR_partial(const VkSurfaceCapabilities2KHR *val)
+{
+    size_t size = 0;
+
+    size += vn_sizeof_VkStructureType(&val->sType);
+    size += vn_sizeof_VkSurfaceCapabilities2KHR_pnext_partial(val->pNext);
+    size += vn_sizeof_VkSurfaceCapabilities2KHR_self_partial(val);
+
+    return size;
+}
+
+static inline void
+vn_encode_VkSurfaceCapabilities2KHR_pnext_partial(struct vn_cs_encoder *enc, const void *val)
+{
+    /* no known/supported struct */
+    vn_encode_simple_pointer(enc, NULL);
+}
+
+static inline void
+vn_encode_VkSurfaceCapabilities2KHR_self_partial(struct vn_cs_encoder *enc, const VkSurfaceCapabilities2KHR *val)
+{
+    /* skip val->{sType,pNext} */
+    vn_encode_VkSurfaceCapabilitiesKHR_partial(enc, &val->surfaceCapabilities);
+}
+
+static inline void
+vn_encode_VkSurfaceCapabilities2KHR_partial(struct vn_cs_encoder *enc, const VkSurfaceCapabilities2KHR *val)
+{
+    assert(val->sType == VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_2_KHR);
+    vn_encode_VkStructureType(enc, &(VkStructureType){ VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_2_KHR });
+    vn_encode_VkSurfaceCapabilities2KHR_pnext_partial(enc, val->pNext);
+    vn_encode_VkSurfaceCapabilities2KHR_self_partial(enc, val);
+}
+
+/* struct VkSurfaceFormat2KHR chain */
+
+static inline size_t
+vn_sizeof_VkSurfaceFormat2KHR_pnext(const void *val)
+{
+    /* no known/supported struct */
+    return vn_sizeof_simple_pointer(NULL);
+}
+
+static inline size_t
+vn_sizeof_VkSurfaceFormat2KHR_self(const VkSurfaceFormat2KHR *val)
+{
+    size_t size = 0;
+    /* skip val->{sType,pNext} */
+    size += vn_sizeof_VkSurfaceFormatKHR(&val->surfaceFormat);
+    return size;
+}
+
+static inline size_t
+vn_sizeof_VkSurfaceFormat2KHR(const VkSurfaceFormat2KHR *val)
+{
+    size_t size = 0;
+
+    size += vn_sizeof_VkStructureType(&val->sType);
+    size += vn_sizeof_VkSurfaceFormat2KHR_pnext(val->pNext);
+    size += vn_sizeof_VkSurfaceFormat2KHR_self(val);
+
+    return size;
+}
+
+static inline void
+vn_decode_VkSurfaceFormat2KHR_pnext(struct vn_cs_decoder *dec, const void *val)
+{
+    /* no known/supported struct */
+    if (vn_decode_simple_pointer(dec))
+        assert(false);
+}
+
+static inline void
+vn_decode_VkSurfaceFormat2KHR_self(struct vn_cs_decoder *dec, VkSurfaceFormat2KHR *val)
+{
+    /* skip val->{sType,pNext} */
+    vn_decode_VkSurfaceFormatKHR(dec, &val->surfaceFormat);
+}
+
+static inline void
+vn_decode_VkSurfaceFormat2KHR(struct vn_cs_decoder *dec, VkSurfaceFormat2KHR *val)
+{
+    VkStructureType stype;
+    vn_decode_VkStructureType(dec, &stype);
+    assert(stype == VK_STRUCTURE_TYPE_SURFACE_FORMAT_2_KHR);
+
+    assert(val->sType == stype);
+    vn_decode_VkSurfaceFormat2KHR_pnext(dec, val->pNext);
+    vn_decode_VkSurfaceFormat2KHR_self(dec, val);
+}
+
+static inline size_t
+vn_sizeof_VkSurfaceFormat2KHR_pnext_partial(const void *val)
+{
+    /* no known/supported struct */
+    return vn_sizeof_simple_pointer(NULL);
+}
+
+static inline size_t
+vn_sizeof_VkSurfaceFormat2KHR_self_partial(const VkSurfaceFormat2KHR *val)
+{
+    size_t size = 0;
+    /* skip val->{sType,pNext} */
+    size += vn_sizeof_VkSurfaceFormatKHR_partial(&val->surfaceFormat);
+    return size;
+}
+
+static inline size_t
+vn_sizeof_VkSurfaceFormat2KHR_partial(const VkSurfaceFormat2KHR *val)
+{
+    size_t size = 0;
+
+    size += vn_sizeof_VkStructureType(&val->sType);
+    size += vn_sizeof_VkSurfaceFormat2KHR_pnext_partial(val->pNext);
+    size += vn_sizeof_VkSurfaceFormat2KHR_self_partial(val);
+
+    return size;
+}
+
+static inline void
+vn_encode_VkSurfaceFormat2KHR_pnext_partial(struct vn_cs_encoder *enc, const void *val)
+{
+    /* no known/supported struct */
+    vn_encode_simple_pointer(enc, NULL);
+}
+
+static inline void
+vn_encode_VkSurfaceFormat2KHR_self_partial(struct vn_cs_encoder *enc, const VkSurfaceFormat2KHR *val)
+{
+    /* skip val->{sType,pNext} */
+    vn_encode_VkSurfaceFormatKHR_partial(enc, &val->surfaceFormat);
+}
+
+static inline void
+vn_encode_VkSurfaceFormat2KHR_partial(struct vn_cs_encoder *enc, const VkSurfaceFormat2KHR *val)
+{
+    assert(val->sType == VK_STRUCTURE_TYPE_SURFACE_FORMAT_2_KHR);
+    vn_encode_VkStructureType(enc, &(VkStructureType){ VK_STRUCTURE_TYPE_SURFACE_FORMAT_2_KHR });
+    vn_encode_VkSurfaceFormat2KHR_pnext_partial(enc, val->pNext);
+    vn_encode_VkSurfaceFormat2KHR_self_partial(enc, val);
 }
 
 /* struct VkDeviceQueueTimelineInfoMESA chain */
@@ -37812,6 +38297,303 @@ static inline void vn_decode_vkGetPhysicalDeviceSparseImageFormatProperties_repl
     }
 }
 
+static inline size_t vn_sizeof_vkGetPhysicalDeviceSurfaceSupportKHR(VkPhysicalDevice physicalDevice, uint32_t queueFamilyIndex, VkSurfaceKHR surface, VkBool32* pSupported)
+{
+    const VkCommandTypeEXT cmd_type = VK_COMMAND_TYPE_vkGetPhysicalDeviceSurfaceSupportKHR_EXT;
+    const VkFlags cmd_flags = 0;
+    size_t cmd_size = vn_sizeof_VkCommandTypeEXT(&cmd_type) + vn_sizeof_VkFlags(&cmd_flags);
+
+    cmd_size += vn_sizeof_VkPhysicalDevice(&physicalDevice);
+    cmd_size += vn_sizeof_uint32_t(&queueFamilyIndex);
+    cmd_size += vn_sizeof_VkSurfaceKHR(&surface);
+    cmd_size += vn_sizeof_simple_pointer(pSupported); /* out */
+
+    return cmd_size;
+}
+
+static inline void vn_encode_vkGetPhysicalDeviceSurfaceSupportKHR(struct vn_cs_encoder *enc, VkCommandFlagsEXT cmd_flags, VkPhysicalDevice physicalDevice, uint32_t queueFamilyIndex, VkSurfaceKHR surface, VkBool32* pSupported)
+{
+    const VkCommandTypeEXT cmd_type = VK_COMMAND_TYPE_vkGetPhysicalDeviceSurfaceSupportKHR_EXT;
+
+    vn_encode_VkCommandTypeEXT(enc, &cmd_type);
+    vn_encode_VkFlags(enc, &cmd_flags);
+
+    vn_encode_VkPhysicalDevice(enc, &physicalDevice);
+    vn_encode_uint32_t(enc, &queueFamilyIndex);
+    vn_encode_VkSurfaceKHR(enc, &surface);
+    vn_encode_simple_pointer(enc, pSupported); /* out */
+}
+
+static inline size_t vn_sizeof_vkGetPhysicalDeviceSurfaceSupportKHR_reply(VkPhysicalDevice physicalDevice, uint32_t queueFamilyIndex, VkSurfaceKHR surface, VkBool32* pSupported)
+{
+    const VkCommandTypeEXT cmd_type = VK_COMMAND_TYPE_vkGetPhysicalDeviceSurfaceSupportKHR_EXT;
+    size_t cmd_size = vn_sizeof_VkCommandTypeEXT(&cmd_type);
+
+    VkResult ret;
+    cmd_size += vn_sizeof_VkResult(&ret);
+    /* skip physicalDevice */
+    /* skip queueFamilyIndex */
+    /* skip surface */
+    cmd_size += vn_sizeof_simple_pointer(pSupported);
+    if (pSupported)
+        cmd_size += vn_sizeof_VkBool32(pSupported);
+
+    return cmd_size;
+}
+
+static inline VkResult vn_decode_vkGetPhysicalDeviceSurfaceSupportKHR_reply(struct vn_cs_decoder *dec, VkPhysicalDevice physicalDevice, uint32_t queueFamilyIndex, VkSurfaceKHR surface, VkBool32* pSupported)
+{
+    VkCommandTypeEXT command_type;
+    vn_decode_VkCommandTypeEXT(dec, &command_type);
+    assert(command_type == VK_COMMAND_TYPE_vkGetPhysicalDeviceSurfaceSupportKHR_EXT);
+
+    VkResult ret;
+    vn_decode_VkResult(dec, &ret);
+    /* skip physicalDevice */
+    /* skip queueFamilyIndex */
+    /* skip surface */
+    if (vn_decode_simple_pointer(dec)) {
+        vn_decode_VkBool32(dec, pSupported);
+    } else {
+        pSupported = NULL;
+    }
+
+    return ret;
+}
+
+static inline size_t vn_sizeof_vkGetPhysicalDeviceSurfaceCapabilitiesKHR(VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, VkSurfaceCapabilitiesKHR* pSurfaceCapabilities)
+{
+    const VkCommandTypeEXT cmd_type = VK_COMMAND_TYPE_vkGetPhysicalDeviceSurfaceCapabilitiesKHR_EXT;
+    const VkFlags cmd_flags = 0;
+    size_t cmd_size = vn_sizeof_VkCommandTypeEXT(&cmd_type) + vn_sizeof_VkFlags(&cmd_flags);
+
+    cmd_size += vn_sizeof_VkPhysicalDevice(&physicalDevice);
+    cmd_size += vn_sizeof_VkSurfaceKHR(&surface);
+    cmd_size += vn_sizeof_simple_pointer(pSurfaceCapabilities);
+    if (pSurfaceCapabilities)
+        cmd_size += vn_sizeof_VkSurfaceCapabilitiesKHR_partial(pSurfaceCapabilities);
+
+    return cmd_size;
+}
+
+static inline void vn_encode_vkGetPhysicalDeviceSurfaceCapabilitiesKHR(struct vn_cs_encoder *enc, VkCommandFlagsEXT cmd_flags, VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, VkSurfaceCapabilitiesKHR* pSurfaceCapabilities)
+{
+    const VkCommandTypeEXT cmd_type = VK_COMMAND_TYPE_vkGetPhysicalDeviceSurfaceCapabilitiesKHR_EXT;
+
+    vn_encode_VkCommandTypeEXT(enc, &cmd_type);
+    vn_encode_VkFlags(enc, &cmd_flags);
+
+    vn_encode_VkPhysicalDevice(enc, &physicalDevice);
+    vn_encode_VkSurfaceKHR(enc, &surface);
+    if (vn_encode_simple_pointer(enc, pSurfaceCapabilities))
+        vn_encode_VkSurfaceCapabilitiesKHR_partial(enc, pSurfaceCapabilities);
+}
+
+static inline size_t vn_sizeof_vkGetPhysicalDeviceSurfaceCapabilitiesKHR_reply(VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, VkSurfaceCapabilitiesKHR* pSurfaceCapabilities)
+{
+    const VkCommandTypeEXT cmd_type = VK_COMMAND_TYPE_vkGetPhysicalDeviceSurfaceCapabilitiesKHR_EXT;
+    size_t cmd_size = vn_sizeof_VkCommandTypeEXT(&cmd_type);
+
+    VkResult ret;
+    cmd_size += vn_sizeof_VkResult(&ret);
+    /* skip physicalDevice */
+    /* skip surface */
+    cmd_size += vn_sizeof_simple_pointer(pSurfaceCapabilities);
+    if (pSurfaceCapabilities)
+        cmd_size += vn_sizeof_VkSurfaceCapabilitiesKHR(pSurfaceCapabilities);
+
+    return cmd_size;
+}
+
+static inline VkResult vn_decode_vkGetPhysicalDeviceSurfaceCapabilitiesKHR_reply(struct vn_cs_decoder *dec, VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, VkSurfaceCapabilitiesKHR* pSurfaceCapabilities)
+{
+    VkCommandTypeEXT command_type;
+    vn_decode_VkCommandTypeEXT(dec, &command_type);
+    assert(command_type == VK_COMMAND_TYPE_vkGetPhysicalDeviceSurfaceCapabilitiesKHR_EXT);
+
+    VkResult ret;
+    vn_decode_VkResult(dec, &ret);
+    /* skip physicalDevice */
+    /* skip surface */
+    if (vn_decode_simple_pointer(dec)) {
+        vn_decode_VkSurfaceCapabilitiesKHR(dec, pSurfaceCapabilities);
+    } else {
+        pSurfaceCapabilities = NULL;
+    }
+
+    return ret;
+}
+
+static inline size_t vn_sizeof_vkGetPhysicalDeviceSurfaceFormatsKHR(VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, uint32_t* pSurfaceFormatCount, VkSurfaceFormatKHR* pSurfaceFormats)
+{
+    const VkCommandTypeEXT cmd_type = VK_COMMAND_TYPE_vkGetPhysicalDeviceSurfaceFormatsKHR_EXT;
+    const VkFlags cmd_flags = 0;
+    size_t cmd_size = vn_sizeof_VkCommandTypeEXT(&cmd_type) + vn_sizeof_VkFlags(&cmd_flags);
+
+    cmd_size += vn_sizeof_VkPhysicalDevice(&physicalDevice);
+    cmd_size += vn_sizeof_VkSurfaceKHR(&surface);
+    cmd_size += vn_sizeof_simple_pointer(pSurfaceFormatCount);
+    if (pSurfaceFormatCount)
+        cmd_size += vn_sizeof_uint32_t(pSurfaceFormatCount);
+    if (pSurfaceFormats) {
+        cmd_size += vn_sizeof_array_size((pSurfaceFormatCount ? *pSurfaceFormatCount : 0));
+        for (uint32_t i = 0; i < (pSurfaceFormatCount ? *pSurfaceFormatCount : 0); i++)
+            cmd_size += vn_sizeof_VkSurfaceFormatKHR_partial(&pSurfaceFormats[i]);
+    } else {
+        cmd_size += vn_sizeof_array_size(0);
+    }
+
+    return cmd_size;
+}
+
+static inline void vn_encode_vkGetPhysicalDeviceSurfaceFormatsKHR(struct vn_cs_encoder *enc, VkCommandFlagsEXT cmd_flags, VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, uint32_t* pSurfaceFormatCount, VkSurfaceFormatKHR* pSurfaceFormats)
+{
+    const VkCommandTypeEXT cmd_type = VK_COMMAND_TYPE_vkGetPhysicalDeviceSurfaceFormatsKHR_EXT;
+
+    vn_encode_VkCommandTypeEXT(enc, &cmd_type);
+    vn_encode_VkFlags(enc, &cmd_flags);
+
+    vn_encode_VkPhysicalDevice(enc, &physicalDevice);
+    vn_encode_VkSurfaceKHR(enc, &surface);
+    if (vn_encode_simple_pointer(enc, pSurfaceFormatCount))
+        vn_encode_uint32_t(enc, pSurfaceFormatCount);
+    if (pSurfaceFormats) {
+        vn_encode_array_size(enc, (pSurfaceFormatCount ? *pSurfaceFormatCount : 0));
+        for (uint32_t i = 0; i < (pSurfaceFormatCount ? *pSurfaceFormatCount : 0); i++)
+            vn_encode_VkSurfaceFormatKHR_partial(enc, &pSurfaceFormats[i]);
+    } else {
+        vn_encode_array_size(enc, 0);
+    }
+}
+
+static inline size_t vn_sizeof_vkGetPhysicalDeviceSurfaceFormatsKHR_reply(VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, uint32_t* pSurfaceFormatCount, VkSurfaceFormatKHR* pSurfaceFormats)
+{
+    const VkCommandTypeEXT cmd_type = VK_COMMAND_TYPE_vkGetPhysicalDeviceSurfaceFormatsKHR_EXT;
+    size_t cmd_size = vn_sizeof_VkCommandTypeEXT(&cmd_type);
+
+    VkResult ret;
+    cmd_size += vn_sizeof_VkResult(&ret);
+    /* skip physicalDevice */
+    /* skip surface */
+    cmd_size += vn_sizeof_simple_pointer(pSurfaceFormatCount);
+    if (pSurfaceFormatCount)
+        cmd_size += vn_sizeof_uint32_t(pSurfaceFormatCount);
+    if (pSurfaceFormats) {
+        cmd_size += vn_sizeof_array_size((pSurfaceFormatCount ? *pSurfaceFormatCount : 0));
+        for (uint32_t i = 0; i < (pSurfaceFormatCount ? *pSurfaceFormatCount : 0); i++)
+            cmd_size += vn_sizeof_VkSurfaceFormatKHR(&pSurfaceFormats[i]);
+    } else {
+        cmd_size += vn_sizeof_array_size(0);
+    }
+
+    return cmd_size;
+}
+
+static inline VkResult vn_decode_vkGetPhysicalDeviceSurfaceFormatsKHR_reply(struct vn_cs_decoder *dec, VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, uint32_t* pSurfaceFormatCount, VkSurfaceFormatKHR* pSurfaceFormats)
+{
+    VkCommandTypeEXT command_type;
+    vn_decode_VkCommandTypeEXT(dec, &command_type);
+    assert(command_type == VK_COMMAND_TYPE_vkGetPhysicalDeviceSurfaceFormatsKHR_EXT);
+
+    VkResult ret;
+    vn_decode_VkResult(dec, &ret);
+    /* skip physicalDevice */
+    /* skip surface */
+    if (vn_decode_simple_pointer(dec)) {
+        vn_decode_uint32_t(dec, pSurfaceFormatCount);
+    } else {
+        pSurfaceFormatCount = NULL;
+    }
+    if (vn_peek_array_size(dec)) {
+        const uint32_t iter_count = vn_decode_array_size(dec, (pSurfaceFormatCount ? *pSurfaceFormatCount : 0));
+        for (uint32_t i = 0; i < iter_count; i++)
+            vn_decode_VkSurfaceFormatKHR(dec, &pSurfaceFormats[i]);
+    } else {
+        vn_decode_array_size_unchecked(dec);
+        pSurfaceFormats = NULL;
+    }
+
+    return ret;
+}
+
+static inline size_t vn_sizeof_vkGetPhysicalDeviceSurfacePresentModesKHR(VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, uint32_t* pPresentModeCount, VkPresentModeKHR* pPresentModes)
+{
+    const VkCommandTypeEXT cmd_type = VK_COMMAND_TYPE_vkGetPhysicalDeviceSurfacePresentModesKHR_EXT;
+    const VkFlags cmd_flags = 0;
+    size_t cmd_size = vn_sizeof_VkCommandTypeEXT(&cmd_type) + vn_sizeof_VkFlags(&cmd_flags);
+
+    cmd_size += vn_sizeof_VkPhysicalDevice(&physicalDevice);
+    cmd_size += vn_sizeof_VkSurfaceKHR(&surface);
+    cmd_size += vn_sizeof_simple_pointer(pPresentModeCount);
+    if (pPresentModeCount)
+        cmd_size += vn_sizeof_uint32_t(pPresentModeCount);
+    cmd_size += vn_sizeof_simple_pointer(pPresentModes); /* out */
+
+    return cmd_size;
+}
+
+static inline void vn_encode_vkGetPhysicalDeviceSurfacePresentModesKHR(struct vn_cs_encoder *enc, VkCommandFlagsEXT cmd_flags, VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, uint32_t* pPresentModeCount, VkPresentModeKHR* pPresentModes)
+{
+    const VkCommandTypeEXT cmd_type = VK_COMMAND_TYPE_vkGetPhysicalDeviceSurfacePresentModesKHR_EXT;
+
+    vn_encode_VkCommandTypeEXT(enc, &cmd_type);
+    vn_encode_VkFlags(enc, &cmd_flags);
+
+    vn_encode_VkPhysicalDevice(enc, &physicalDevice);
+    vn_encode_VkSurfaceKHR(enc, &surface);
+    if (vn_encode_simple_pointer(enc, pPresentModeCount))
+        vn_encode_uint32_t(enc, pPresentModeCount);
+    vn_encode_array_size(enc, pPresentModes ? (pPresentModeCount ? *pPresentModeCount : 0) : 0); /* out */
+}
+
+static inline size_t vn_sizeof_vkGetPhysicalDeviceSurfacePresentModesKHR_reply(VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, uint32_t* pPresentModeCount, VkPresentModeKHR* pPresentModes)
+{
+    const VkCommandTypeEXT cmd_type = VK_COMMAND_TYPE_vkGetPhysicalDeviceSurfacePresentModesKHR_EXT;
+    size_t cmd_size = vn_sizeof_VkCommandTypeEXT(&cmd_type);
+
+    VkResult ret;
+    cmd_size += vn_sizeof_VkResult(&ret);
+    /* skip physicalDevice */
+    /* skip surface */
+    cmd_size += vn_sizeof_simple_pointer(pPresentModeCount);
+    if (pPresentModeCount)
+        cmd_size += vn_sizeof_uint32_t(pPresentModeCount);
+    if (pPresentModes) {
+        cmd_size += vn_sizeof_array_size((pPresentModeCount ? *pPresentModeCount : 0));
+        cmd_size += vn_sizeof_VkPresentModeKHR_array(pPresentModes, (pPresentModeCount ? *pPresentModeCount : 0));
+    } else {
+        cmd_size += vn_sizeof_array_size(0);
+    }
+
+    return cmd_size;
+}
+
+static inline VkResult vn_decode_vkGetPhysicalDeviceSurfacePresentModesKHR_reply(struct vn_cs_decoder *dec, VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, uint32_t* pPresentModeCount, VkPresentModeKHR* pPresentModes)
+{
+    VkCommandTypeEXT command_type;
+    vn_decode_VkCommandTypeEXT(dec, &command_type);
+    assert(command_type == VK_COMMAND_TYPE_vkGetPhysicalDeviceSurfacePresentModesKHR_EXT);
+
+    VkResult ret;
+    vn_decode_VkResult(dec, &ret);
+    /* skip physicalDevice */
+    /* skip surface */
+    if (vn_decode_simple_pointer(dec)) {
+        vn_decode_uint32_t(dec, pPresentModeCount);
+    } else {
+        pPresentModeCount = NULL;
+    }
+    if (vn_peek_array_size(dec)) {
+        const size_t array_size = vn_decode_array_size(dec, (pPresentModeCount ? *pPresentModeCount : 0));
+        vn_decode_VkPresentModeKHR_array(dec, pPresentModes, array_size);
+    } else {
+        vn_decode_array_size_unchecked(dec);
+        pPresentModes = NULL;
+    }
+
+    return ret;
+}
+
 static inline size_t vn_sizeof_vkGetPhysicalDeviceFeatures2(VkPhysicalDevice physicalDevice, VkPhysicalDeviceFeatures2* pFeatures)
 {
     const VkCommandTypeEXT cmd_type = VK_COMMAND_TYPE_vkGetPhysicalDeviceFeatures2_EXT;
@@ -38595,6 +39377,217 @@ static inline void vn_decode_vkGetDeviceGroupPeerMemoryFeatures_reply(struct vn_
     }
 }
 
+static inline size_t vn_sizeof_vkGetDeviceGroupPresentCapabilitiesKHR(VkDevice device, VkDeviceGroupPresentCapabilitiesKHR* pDeviceGroupPresentCapabilities)
+{
+    const VkCommandTypeEXT cmd_type = VK_COMMAND_TYPE_vkGetDeviceGroupPresentCapabilitiesKHR_EXT;
+    const VkFlags cmd_flags = 0;
+    size_t cmd_size = vn_sizeof_VkCommandTypeEXT(&cmd_type) + vn_sizeof_VkFlags(&cmd_flags);
+
+    cmd_size += vn_sizeof_VkDevice(&device);
+    cmd_size += vn_sizeof_simple_pointer(pDeviceGroupPresentCapabilities);
+    if (pDeviceGroupPresentCapabilities)
+        cmd_size += vn_sizeof_VkDeviceGroupPresentCapabilitiesKHR_partial(pDeviceGroupPresentCapabilities);
+
+    return cmd_size;
+}
+
+static inline void vn_encode_vkGetDeviceGroupPresentCapabilitiesKHR(struct vn_cs_encoder *enc, VkCommandFlagsEXT cmd_flags, VkDevice device, VkDeviceGroupPresentCapabilitiesKHR* pDeviceGroupPresentCapabilities)
+{
+    const VkCommandTypeEXT cmd_type = VK_COMMAND_TYPE_vkGetDeviceGroupPresentCapabilitiesKHR_EXT;
+
+    vn_encode_VkCommandTypeEXT(enc, &cmd_type);
+    vn_encode_VkFlags(enc, &cmd_flags);
+
+    vn_encode_VkDevice(enc, &device);
+    if (vn_encode_simple_pointer(enc, pDeviceGroupPresentCapabilities))
+        vn_encode_VkDeviceGroupPresentCapabilitiesKHR_partial(enc, pDeviceGroupPresentCapabilities);
+}
+
+static inline size_t vn_sizeof_vkGetDeviceGroupPresentCapabilitiesKHR_reply(VkDevice device, VkDeviceGroupPresentCapabilitiesKHR* pDeviceGroupPresentCapabilities)
+{
+    const VkCommandTypeEXT cmd_type = VK_COMMAND_TYPE_vkGetDeviceGroupPresentCapabilitiesKHR_EXT;
+    size_t cmd_size = vn_sizeof_VkCommandTypeEXT(&cmd_type);
+
+    VkResult ret;
+    cmd_size += vn_sizeof_VkResult(&ret);
+    /* skip device */
+    cmd_size += vn_sizeof_simple_pointer(pDeviceGroupPresentCapabilities);
+    if (pDeviceGroupPresentCapabilities)
+        cmd_size += vn_sizeof_VkDeviceGroupPresentCapabilitiesKHR(pDeviceGroupPresentCapabilities);
+
+    return cmd_size;
+}
+
+static inline VkResult vn_decode_vkGetDeviceGroupPresentCapabilitiesKHR_reply(struct vn_cs_decoder *dec, VkDevice device, VkDeviceGroupPresentCapabilitiesKHR* pDeviceGroupPresentCapabilities)
+{
+    VkCommandTypeEXT command_type;
+    vn_decode_VkCommandTypeEXT(dec, &command_type);
+    assert(command_type == VK_COMMAND_TYPE_vkGetDeviceGroupPresentCapabilitiesKHR_EXT);
+
+    VkResult ret;
+    vn_decode_VkResult(dec, &ret);
+    /* skip device */
+    if (vn_decode_simple_pointer(dec)) {
+        vn_decode_VkDeviceGroupPresentCapabilitiesKHR(dec, pDeviceGroupPresentCapabilities);
+    } else {
+        pDeviceGroupPresentCapabilities = NULL;
+    }
+
+    return ret;
+}
+
+static inline size_t vn_sizeof_vkGetDeviceGroupSurfacePresentModesKHR(VkDevice device, VkSurfaceKHR surface, VkDeviceGroupPresentModeFlagsKHR* pModes)
+{
+    const VkCommandTypeEXT cmd_type = VK_COMMAND_TYPE_vkGetDeviceGroupSurfacePresentModesKHR_EXT;
+    const VkFlags cmd_flags = 0;
+    size_t cmd_size = vn_sizeof_VkCommandTypeEXT(&cmd_type) + vn_sizeof_VkFlags(&cmd_flags);
+
+    cmd_size += vn_sizeof_VkDevice(&device);
+    cmd_size += vn_sizeof_VkSurfaceKHR(&surface);
+    cmd_size += vn_sizeof_simple_pointer(pModes); /* out */
+
+    return cmd_size;
+}
+
+static inline void vn_encode_vkGetDeviceGroupSurfacePresentModesKHR(struct vn_cs_encoder *enc, VkCommandFlagsEXT cmd_flags, VkDevice device, VkSurfaceKHR surface, VkDeviceGroupPresentModeFlagsKHR* pModes)
+{
+    const VkCommandTypeEXT cmd_type = VK_COMMAND_TYPE_vkGetDeviceGroupSurfacePresentModesKHR_EXT;
+
+    vn_encode_VkCommandTypeEXT(enc, &cmd_type);
+    vn_encode_VkFlags(enc, &cmd_flags);
+
+    vn_encode_VkDevice(enc, &device);
+    vn_encode_VkSurfaceKHR(enc, &surface);
+    vn_encode_simple_pointer(enc, pModes); /* out */
+}
+
+static inline size_t vn_sizeof_vkGetDeviceGroupSurfacePresentModesKHR_reply(VkDevice device, VkSurfaceKHR surface, VkDeviceGroupPresentModeFlagsKHR* pModes)
+{
+    const VkCommandTypeEXT cmd_type = VK_COMMAND_TYPE_vkGetDeviceGroupSurfacePresentModesKHR_EXT;
+    size_t cmd_size = vn_sizeof_VkCommandTypeEXT(&cmd_type);
+
+    VkResult ret;
+    cmd_size += vn_sizeof_VkResult(&ret);
+    /* skip device */
+    /* skip surface */
+    cmd_size += vn_sizeof_simple_pointer(pModes);
+    if (pModes)
+        cmd_size += vn_sizeof_VkFlags(pModes);
+
+    return cmd_size;
+}
+
+static inline VkResult vn_decode_vkGetDeviceGroupSurfacePresentModesKHR_reply(struct vn_cs_decoder *dec, VkDevice device, VkSurfaceKHR surface, VkDeviceGroupPresentModeFlagsKHR* pModes)
+{
+    VkCommandTypeEXT command_type;
+    vn_decode_VkCommandTypeEXT(dec, &command_type);
+    assert(command_type == VK_COMMAND_TYPE_vkGetDeviceGroupSurfacePresentModesKHR_EXT);
+
+    VkResult ret;
+    vn_decode_VkResult(dec, &ret);
+    /* skip device */
+    /* skip surface */
+    if (vn_decode_simple_pointer(dec)) {
+        vn_decode_VkFlags(dec, pModes);
+    } else {
+        pModes = NULL;
+    }
+
+    return ret;
+}
+
+static inline size_t vn_sizeof_vkGetPhysicalDevicePresentRectanglesKHR(VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, uint32_t* pRectCount, VkRect2D* pRects)
+{
+    const VkCommandTypeEXT cmd_type = VK_COMMAND_TYPE_vkGetPhysicalDevicePresentRectanglesKHR_EXT;
+    const VkFlags cmd_flags = 0;
+    size_t cmd_size = vn_sizeof_VkCommandTypeEXT(&cmd_type) + vn_sizeof_VkFlags(&cmd_flags);
+
+    cmd_size += vn_sizeof_VkPhysicalDevice(&physicalDevice);
+    cmd_size += vn_sizeof_VkSurfaceKHR(&surface);
+    cmd_size += vn_sizeof_simple_pointer(pRectCount);
+    if (pRectCount)
+        cmd_size += vn_sizeof_uint32_t(pRectCount);
+    if (pRects) {
+        cmd_size += vn_sizeof_array_size((pRectCount ? *pRectCount : 0));
+        for (uint32_t i = 0; i < (pRectCount ? *pRectCount : 0); i++)
+            cmd_size += vn_sizeof_VkRect2D_partial(&pRects[i]);
+    } else {
+        cmd_size += vn_sizeof_array_size(0);
+    }
+
+    return cmd_size;
+}
+
+static inline void vn_encode_vkGetPhysicalDevicePresentRectanglesKHR(struct vn_cs_encoder *enc, VkCommandFlagsEXT cmd_flags, VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, uint32_t* pRectCount, VkRect2D* pRects)
+{
+    const VkCommandTypeEXT cmd_type = VK_COMMAND_TYPE_vkGetPhysicalDevicePresentRectanglesKHR_EXT;
+
+    vn_encode_VkCommandTypeEXT(enc, &cmd_type);
+    vn_encode_VkFlags(enc, &cmd_flags);
+
+    vn_encode_VkPhysicalDevice(enc, &physicalDevice);
+    vn_encode_VkSurfaceKHR(enc, &surface);
+    if (vn_encode_simple_pointer(enc, pRectCount))
+        vn_encode_uint32_t(enc, pRectCount);
+    if (pRects) {
+        vn_encode_array_size(enc, (pRectCount ? *pRectCount : 0));
+        for (uint32_t i = 0; i < (pRectCount ? *pRectCount : 0); i++)
+            vn_encode_VkRect2D_partial(enc, &pRects[i]);
+    } else {
+        vn_encode_array_size(enc, 0);
+    }
+}
+
+static inline size_t vn_sizeof_vkGetPhysicalDevicePresentRectanglesKHR_reply(VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, uint32_t* pRectCount, VkRect2D* pRects)
+{
+    const VkCommandTypeEXT cmd_type = VK_COMMAND_TYPE_vkGetPhysicalDevicePresentRectanglesKHR_EXT;
+    size_t cmd_size = vn_sizeof_VkCommandTypeEXT(&cmd_type);
+
+    VkResult ret;
+    cmd_size += vn_sizeof_VkResult(&ret);
+    /* skip physicalDevice */
+    /* skip surface */
+    cmd_size += vn_sizeof_simple_pointer(pRectCount);
+    if (pRectCount)
+        cmd_size += vn_sizeof_uint32_t(pRectCount);
+    if (pRects) {
+        cmd_size += vn_sizeof_array_size((pRectCount ? *pRectCount : 0));
+        for (uint32_t i = 0; i < (pRectCount ? *pRectCount : 0); i++)
+            cmd_size += vn_sizeof_VkRect2D(&pRects[i]);
+    } else {
+        cmd_size += vn_sizeof_array_size(0);
+    }
+
+    return cmd_size;
+}
+
+static inline VkResult vn_decode_vkGetPhysicalDevicePresentRectanglesKHR_reply(struct vn_cs_decoder *dec, VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, uint32_t* pRectCount, VkRect2D* pRects)
+{
+    VkCommandTypeEXT command_type;
+    vn_decode_VkCommandTypeEXT(dec, &command_type);
+    assert(command_type == VK_COMMAND_TYPE_vkGetPhysicalDevicePresentRectanglesKHR_EXT);
+
+    VkResult ret;
+    vn_decode_VkResult(dec, &ret);
+    /* skip physicalDevice */
+    /* skip surface */
+    if (vn_decode_simple_pointer(dec)) {
+        vn_decode_uint32_t(dec, pRectCount);
+    } else {
+        pRectCount = NULL;
+    }
+    if (vn_peek_array_size(dec)) {
+        const uint32_t iter_count = vn_decode_array_size(dec, (pRectCount ? *pRectCount : 0));
+        for (uint32_t i = 0; i < iter_count; i++)
+            vn_decode_VkRect2D(dec, &pRects[i]);
+    } else {
+        vn_decode_array_size_unchecked(dec);
+        pRects = NULL;
+    }
+
+    return ret;
+}
+
 static inline size_t vn_sizeof_vkGetPhysicalDeviceMultisamplePropertiesEXT(VkPhysicalDevice physicalDevice, VkSampleCountFlagBits samples, VkMultisamplePropertiesEXT* pMultisampleProperties)
 {
     const VkCommandTypeEXT cmd_type = VK_COMMAND_TYPE_vkGetPhysicalDeviceMultisamplePropertiesEXT_EXT;
@@ -38650,6 +39643,167 @@ static inline void vn_decode_vkGetPhysicalDeviceMultisamplePropertiesEXT_reply(s
     } else {
         pMultisampleProperties = NULL;
     }
+}
+
+static inline size_t vn_sizeof_vkGetPhysicalDeviceSurfaceCapabilities2KHR(VkPhysicalDevice physicalDevice, const VkPhysicalDeviceSurfaceInfo2KHR* pSurfaceInfo, VkSurfaceCapabilities2KHR* pSurfaceCapabilities)
+{
+    const VkCommandTypeEXT cmd_type = VK_COMMAND_TYPE_vkGetPhysicalDeviceSurfaceCapabilities2KHR_EXT;
+    const VkFlags cmd_flags = 0;
+    size_t cmd_size = vn_sizeof_VkCommandTypeEXT(&cmd_type) + vn_sizeof_VkFlags(&cmd_flags);
+
+    cmd_size += vn_sizeof_VkPhysicalDevice(&physicalDevice);
+    cmd_size += vn_sizeof_simple_pointer(pSurfaceInfo);
+    if (pSurfaceInfo)
+        cmd_size += vn_sizeof_VkPhysicalDeviceSurfaceInfo2KHR(pSurfaceInfo);
+    cmd_size += vn_sizeof_simple_pointer(pSurfaceCapabilities);
+    if (pSurfaceCapabilities)
+        cmd_size += vn_sizeof_VkSurfaceCapabilities2KHR_partial(pSurfaceCapabilities);
+
+    return cmd_size;
+}
+
+static inline void vn_encode_vkGetPhysicalDeviceSurfaceCapabilities2KHR(struct vn_cs_encoder *enc, VkCommandFlagsEXT cmd_flags, VkPhysicalDevice physicalDevice, const VkPhysicalDeviceSurfaceInfo2KHR* pSurfaceInfo, VkSurfaceCapabilities2KHR* pSurfaceCapabilities)
+{
+    const VkCommandTypeEXT cmd_type = VK_COMMAND_TYPE_vkGetPhysicalDeviceSurfaceCapabilities2KHR_EXT;
+
+    vn_encode_VkCommandTypeEXT(enc, &cmd_type);
+    vn_encode_VkFlags(enc, &cmd_flags);
+
+    vn_encode_VkPhysicalDevice(enc, &physicalDevice);
+    if (vn_encode_simple_pointer(enc, pSurfaceInfo))
+        vn_encode_VkPhysicalDeviceSurfaceInfo2KHR(enc, pSurfaceInfo);
+    if (vn_encode_simple_pointer(enc, pSurfaceCapabilities))
+        vn_encode_VkSurfaceCapabilities2KHR_partial(enc, pSurfaceCapabilities);
+}
+
+static inline size_t vn_sizeof_vkGetPhysicalDeviceSurfaceCapabilities2KHR_reply(VkPhysicalDevice physicalDevice, const VkPhysicalDeviceSurfaceInfo2KHR* pSurfaceInfo, VkSurfaceCapabilities2KHR* pSurfaceCapabilities)
+{
+    const VkCommandTypeEXT cmd_type = VK_COMMAND_TYPE_vkGetPhysicalDeviceSurfaceCapabilities2KHR_EXT;
+    size_t cmd_size = vn_sizeof_VkCommandTypeEXT(&cmd_type);
+
+    VkResult ret;
+    cmd_size += vn_sizeof_VkResult(&ret);
+    /* skip physicalDevice */
+    /* skip pSurfaceInfo */
+    cmd_size += vn_sizeof_simple_pointer(pSurfaceCapabilities);
+    if (pSurfaceCapabilities)
+        cmd_size += vn_sizeof_VkSurfaceCapabilities2KHR(pSurfaceCapabilities);
+
+    return cmd_size;
+}
+
+static inline VkResult vn_decode_vkGetPhysicalDeviceSurfaceCapabilities2KHR_reply(struct vn_cs_decoder *dec, VkPhysicalDevice physicalDevice, const VkPhysicalDeviceSurfaceInfo2KHR* pSurfaceInfo, VkSurfaceCapabilities2KHR* pSurfaceCapabilities)
+{
+    VkCommandTypeEXT command_type;
+    vn_decode_VkCommandTypeEXT(dec, &command_type);
+    assert(command_type == VK_COMMAND_TYPE_vkGetPhysicalDeviceSurfaceCapabilities2KHR_EXT);
+
+    VkResult ret;
+    vn_decode_VkResult(dec, &ret);
+    /* skip physicalDevice */
+    /* skip pSurfaceInfo */
+    if (vn_decode_simple_pointer(dec)) {
+        vn_decode_VkSurfaceCapabilities2KHR(dec, pSurfaceCapabilities);
+    } else {
+        pSurfaceCapabilities = NULL;
+    }
+
+    return ret;
+}
+
+static inline size_t vn_sizeof_vkGetPhysicalDeviceSurfaceFormats2KHR(VkPhysicalDevice physicalDevice, const VkPhysicalDeviceSurfaceInfo2KHR* pSurfaceInfo, uint32_t* pSurfaceFormatCount, VkSurfaceFormat2KHR* pSurfaceFormats)
+{
+    const VkCommandTypeEXT cmd_type = VK_COMMAND_TYPE_vkGetPhysicalDeviceSurfaceFormats2KHR_EXT;
+    const VkFlags cmd_flags = 0;
+    size_t cmd_size = vn_sizeof_VkCommandTypeEXT(&cmd_type) + vn_sizeof_VkFlags(&cmd_flags);
+
+    cmd_size += vn_sizeof_VkPhysicalDevice(&physicalDevice);
+    cmd_size += vn_sizeof_simple_pointer(pSurfaceInfo);
+    if (pSurfaceInfo)
+        cmd_size += vn_sizeof_VkPhysicalDeviceSurfaceInfo2KHR(pSurfaceInfo);
+    cmd_size += vn_sizeof_simple_pointer(pSurfaceFormatCount);
+    if (pSurfaceFormatCount)
+        cmd_size += vn_sizeof_uint32_t(pSurfaceFormatCount);
+    if (pSurfaceFormats) {
+        cmd_size += vn_sizeof_array_size((pSurfaceFormatCount ? *pSurfaceFormatCount : 0));
+        for (uint32_t i = 0; i < (pSurfaceFormatCount ? *pSurfaceFormatCount : 0); i++)
+            cmd_size += vn_sizeof_VkSurfaceFormat2KHR_partial(&pSurfaceFormats[i]);
+    } else {
+        cmd_size += vn_sizeof_array_size(0);
+    }
+
+    return cmd_size;
+}
+
+static inline void vn_encode_vkGetPhysicalDeviceSurfaceFormats2KHR(struct vn_cs_encoder *enc, VkCommandFlagsEXT cmd_flags, VkPhysicalDevice physicalDevice, const VkPhysicalDeviceSurfaceInfo2KHR* pSurfaceInfo, uint32_t* pSurfaceFormatCount, VkSurfaceFormat2KHR* pSurfaceFormats)
+{
+    const VkCommandTypeEXT cmd_type = VK_COMMAND_TYPE_vkGetPhysicalDeviceSurfaceFormats2KHR_EXT;
+
+    vn_encode_VkCommandTypeEXT(enc, &cmd_type);
+    vn_encode_VkFlags(enc, &cmd_flags);
+
+    vn_encode_VkPhysicalDevice(enc, &physicalDevice);
+    if (vn_encode_simple_pointer(enc, pSurfaceInfo))
+        vn_encode_VkPhysicalDeviceSurfaceInfo2KHR(enc, pSurfaceInfo);
+    if (vn_encode_simple_pointer(enc, pSurfaceFormatCount))
+        vn_encode_uint32_t(enc, pSurfaceFormatCount);
+    if (pSurfaceFormats) {
+        vn_encode_array_size(enc, (pSurfaceFormatCount ? *pSurfaceFormatCount : 0));
+        for (uint32_t i = 0; i < (pSurfaceFormatCount ? *pSurfaceFormatCount : 0); i++)
+            vn_encode_VkSurfaceFormat2KHR_partial(enc, &pSurfaceFormats[i]);
+    } else {
+        vn_encode_array_size(enc, 0);
+    }
+}
+
+static inline size_t vn_sizeof_vkGetPhysicalDeviceSurfaceFormats2KHR_reply(VkPhysicalDevice physicalDevice, const VkPhysicalDeviceSurfaceInfo2KHR* pSurfaceInfo, uint32_t* pSurfaceFormatCount, VkSurfaceFormat2KHR* pSurfaceFormats)
+{
+    const VkCommandTypeEXT cmd_type = VK_COMMAND_TYPE_vkGetPhysicalDeviceSurfaceFormats2KHR_EXT;
+    size_t cmd_size = vn_sizeof_VkCommandTypeEXT(&cmd_type);
+
+    VkResult ret;
+    cmd_size += vn_sizeof_VkResult(&ret);
+    /* skip physicalDevice */
+    /* skip pSurfaceInfo */
+    cmd_size += vn_sizeof_simple_pointer(pSurfaceFormatCount);
+    if (pSurfaceFormatCount)
+        cmd_size += vn_sizeof_uint32_t(pSurfaceFormatCount);
+    if (pSurfaceFormats) {
+        cmd_size += vn_sizeof_array_size((pSurfaceFormatCount ? *pSurfaceFormatCount : 0));
+        for (uint32_t i = 0; i < (pSurfaceFormatCount ? *pSurfaceFormatCount : 0); i++)
+            cmd_size += vn_sizeof_VkSurfaceFormat2KHR(&pSurfaceFormats[i]);
+    } else {
+        cmd_size += vn_sizeof_array_size(0);
+    }
+
+    return cmd_size;
+}
+
+static inline VkResult vn_decode_vkGetPhysicalDeviceSurfaceFormats2KHR_reply(struct vn_cs_decoder *dec, VkPhysicalDevice physicalDevice, const VkPhysicalDeviceSurfaceInfo2KHR* pSurfaceInfo, uint32_t* pSurfaceFormatCount, VkSurfaceFormat2KHR* pSurfaceFormats)
+{
+    VkCommandTypeEXT command_type;
+    vn_decode_VkCommandTypeEXT(dec, &command_type);
+    assert(command_type == VK_COMMAND_TYPE_vkGetPhysicalDeviceSurfaceFormats2KHR_EXT);
+
+    VkResult ret;
+    vn_decode_VkResult(dec, &ret);
+    /* skip physicalDevice */
+    /* skip pSurfaceInfo */
+    if (vn_decode_simple_pointer(dec)) {
+        vn_decode_uint32_t(dec, pSurfaceFormatCount);
+    } else {
+        pSurfaceFormatCount = NULL;
+    }
+    if (vn_peek_array_size(dec)) {
+        const uint32_t iter_count = vn_decode_array_size(dec, (pSurfaceFormatCount ? *pSurfaceFormatCount : 0));
+        for (uint32_t i = 0; i < iter_count; i++)
+            vn_decode_VkSurfaceFormat2KHR(dec, &pSurfaceFormats[i]);
+    } else {
+        vn_decode_array_size_unchecked(dec);
+        pSurfaceFormats = NULL;
+    }
+
+    return ret;
 }
 
 static inline size_t vn_sizeof_vkGetDeviceQueue2(VkDevice device, const VkDeviceQueueInfo2* pQueueInfo, VkQueue* pQueue)
@@ -39485,6 +40639,90 @@ static inline void vn_submit_vkGetPhysicalDeviceSparseImageFormatProperties(stru
     }
 }
 
+static inline void vn_submit_vkGetPhysicalDeviceSurfaceSupportKHR(struct vn_ring *vn_ring, VkCommandFlagsEXT cmd_flags, VkPhysicalDevice physicalDevice, uint32_t queueFamilyIndex, VkSurfaceKHR surface, VkBool32* pSupported, struct vn_ring_submit_command *submit)
+{
+    uint8_t local_cmd_data[VN_SUBMIT_LOCAL_CMD_SIZE];
+    void *cmd_data = local_cmd_data;
+    size_t cmd_size = vn_sizeof_vkGetPhysicalDeviceSurfaceSupportKHR(physicalDevice, queueFamilyIndex, surface, pSupported);
+    if (cmd_size > sizeof(local_cmd_data)) {
+        cmd_data = malloc(cmd_size);
+        if (!cmd_data)
+            cmd_size = 0;
+    }
+    const size_t reply_size = cmd_flags & VK_COMMAND_GENERATE_REPLY_BIT_EXT ? vn_sizeof_vkGetPhysicalDeviceSurfaceSupportKHR_reply(physicalDevice, queueFamilyIndex, surface, pSupported) : 0;
+
+    struct vn_cs_encoder *enc = vn_ring_submit_command_init(vn_ring, submit, cmd_data, cmd_size, reply_size);
+    if (cmd_size) {
+        vn_encode_vkGetPhysicalDeviceSurfaceSupportKHR(enc, cmd_flags, physicalDevice, queueFamilyIndex, surface, pSupported);
+        vn_ring_submit_command(vn_ring, submit);
+        if (cmd_data != local_cmd_data)
+            free(cmd_data);
+    }
+}
+
+static inline void vn_submit_vkGetPhysicalDeviceSurfaceCapabilitiesKHR(struct vn_ring *vn_ring, VkCommandFlagsEXT cmd_flags, VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, VkSurfaceCapabilitiesKHR* pSurfaceCapabilities, struct vn_ring_submit_command *submit)
+{
+    uint8_t local_cmd_data[VN_SUBMIT_LOCAL_CMD_SIZE];
+    void *cmd_data = local_cmd_data;
+    size_t cmd_size = vn_sizeof_vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice, surface, pSurfaceCapabilities);
+    if (cmd_size > sizeof(local_cmd_data)) {
+        cmd_data = malloc(cmd_size);
+        if (!cmd_data)
+            cmd_size = 0;
+    }
+    const size_t reply_size = cmd_flags & VK_COMMAND_GENERATE_REPLY_BIT_EXT ? vn_sizeof_vkGetPhysicalDeviceSurfaceCapabilitiesKHR_reply(physicalDevice, surface, pSurfaceCapabilities) : 0;
+
+    struct vn_cs_encoder *enc = vn_ring_submit_command_init(vn_ring, submit, cmd_data, cmd_size, reply_size);
+    if (cmd_size) {
+        vn_encode_vkGetPhysicalDeviceSurfaceCapabilitiesKHR(enc, cmd_flags, physicalDevice, surface, pSurfaceCapabilities);
+        vn_ring_submit_command(vn_ring, submit);
+        if (cmd_data != local_cmd_data)
+            free(cmd_data);
+    }
+}
+
+static inline void vn_submit_vkGetPhysicalDeviceSurfaceFormatsKHR(struct vn_ring *vn_ring, VkCommandFlagsEXT cmd_flags, VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, uint32_t* pSurfaceFormatCount, VkSurfaceFormatKHR* pSurfaceFormats, struct vn_ring_submit_command *submit)
+{
+    uint8_t local_cmd_data[VN_SUBMIT_LOCAL_CMD_SIZE];
+    void *cmd_data = local_cmd_data;
+    size_t cmd_size = vn_sizeof_vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, pSurfaceFormatCount, pSurfaceFormats);
+    if (cmd_size > sizeof(local_cmd_data)) {
+        cmd_data = malloc(cmd_size);
+        if (!cmd_data)
+            cmd_size = 0;
+    }
+    const size_t reply_size = cmd_flags & VK_COMMAND_GENERATE_REPLY_BIT_EXT ? vn_sizeof_vkGetPhysicalDeviceSurfaceFormatsKHR_reply(physicalDevice, surface, pSurfaceFormatCount, pSurfaceFormats) : 0;
+
+    struct vn_cs_encoder *enc = vn_ring_submit_command_init(vn_ring, submit, cmd_data, cmd_size, reply_size);
+    if (cmd_size) {
+        vn_encode_vkGetPhysicalDeviceSurfaceFormatsKHR(enc, cmd_flags, physicalDevice, surface, pSurfaceFormatCount, pSurfaceFormats);
+        vn_ring_submit_command(vn_ring, submit);
+        if (cmd_data != local_cmd_data)
+            free(cmd_data);
+    }
+}
+
+static inline void vn_submit_vkGetPhysicalDeviceSurfacePresentModesKHR(struct vn_ring *vn_ring, VkCommandFlagsEXT cmd_flags, VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, uint32_t* pPresentModeCount, VkPresentModeKHR* pPresentModes, struct vn_ring_submit_command *submit)
+{
+    uint8_t local_cmd_data[VN_SUBMIT_LOCAL_CMD_SIZE];
+    void *cmd_data = local_cmd_data;
+    size_t cmd_size = vn_sizeof_vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, pPresentModeCount, pPresentModes);
+    if (cmd_size > sizeof(local_cmd_data)) {
+        cmd_data = malloc(cmd_size);
+        if (!cmd_data)
+            cmd_size = 0;
+    }
+    const size_t reply_size = cmd_flags & VK_COMMAND_GENERATE_REPLY_BIT_EXT ? vn_sizeof_vkGetPhysicalDeviceSurfacePresentModesKHR_reply(physicalDevice, surface, pPresentModeCount, pPresentModes) : 0;
+
+    struct vn_cs_encoder *enc = vn_ring_submit_command_init(vn_ring, submit, cmd_data, cmd_size, reply_size);
+    if (cmd_size) {
+        vn_encode_vkGetPhysicalDeviceSurfacePresentModesKHR(enc, cmd_flags, physicalDevice, surface, pPresentModeCount, pPresentModes);
+        vn_ring_submit_command(vn_ring, submit);
+        if (cmd_data != local_cmd_data)
+            free(cmd_data);
+    }
+}
+
 static inline void vn_submit_vkGetPhysicalDeviceFeatures2(struct vn_ring *vn_ring, VkCommandFlagsEXT cmd_flags, VkPhysicalDevice physicalDevice, VkPhysicalDeviceFeatures2* pFeatures, struct vn_ring_submit_command *submit)
 {
     uint8_t local_cmd_data[VN_SUBMIT_LOCAL_CMD_SIZE];
@@ -39737,6 +40975,69 @@ static inline void vn_submit_vkGetDeviceGroupPeerMemoryFeatures(struct vn_ring *
     }
 }
 
+static inline void vn_submit_vkGetDeviceGroupPresentCapabilitiesKHR(struct vn_ring *vn_ring, VkCommandFlagsEXT cmd_flags, VkDevice device, VkDeviceGroupPresentCapabilitiesKHR* pDeviceGroupPresentCapabilities, struct vn_ring_submit_command *submit)
+{
+    uint8_t local_cmd_data[VN_SUBMIT_LOCAL_CMD_SIZE];
+    void *cmd_data = local_cmd_data;
+    size_t cmd_size = vn_sizeof_vkGetDeviceGroupPresentCapabilitiesKHR(device, pDeviceGroupPresentCapabilities);
+    if (cmd_size > sizeof(local_cmd_data)) {
+        cmd_data = malloc(cmd_size);
+        if (!cmd_data)
+            cmd_size = 0;
+    }
+    const size_t reply_size = cmd_flags & VK_COMMAND_GENERATE_REPLY_BIT_EXT ? vn_sizeof_vkGetDeviceGroupPresentCapabilitiesKHR_reply(device, pDeviceGroupPresentCapabilities) : 0;
+
+    struct vn_cs_encoder *enc = vn_ring_submit_command_init(vn_ring, submit, cmd_data, cmd_size, reply_size);
+    if (cmd_size) {
+        vn_encode_vkGetDeviceGroupPresentCapabilitiesKHR(enc, cmd_flags, device, pDeviceGroupPresentCapabilities);
+        vn_ring_submit_command(vn_ring, submit);
+        if (cmd_data != local_cmd_data)
+            free(cmd_data);
+    }
+}
+
+static inline void vn_submit_vkGetDeviceGroupSurfacePresentModesKHR(struct vn_ring *vn_ring, VkCommandFlagsEXT cmd_flags, VkDevice device, VkSurfaceKHR surface, VkDeviceGroupPresentModeFlagsKHR* pModes, struct vn_ring_submit_command *submit)
+{
+    uint8_t local_cmd_data[VN_SUBMIT_LOCAL_CMD_SIZE];
+    void *cmd_data = local_cmd_data;
+    size_t cmd_size = vn_sizeof_vkGetDeviceGroupSurfacePresentModesKHR(device, surface, pModes);
+    if (cmd_size > sizeof(local_cmd_data)) {
+        cmd_data = malloc(cmd_size);
+        if (!cmd_data)
+            cmd_size = 0;
+    }
+    const size_t reply_size = cmd_flags & VK_COMMAND_GENERATE_REPLY_BIT_EXT ? vn_sizeof_vkGetDeviceGroupSurfacePresentModesKHR_reply(device, surface, pModes) : 0;
+
+    struct vn_cs_encoder *enc = vn_ring_submit_command_init(vn_ring, submit, cmd_data, cmd_size, reply_size);
+    if (cmd_size) {
+        vn_encode_vkGetDeviceGroupSurfacePresentModesKHR(enc, cmd_flags, device, surface, pModes);
+        vn_ring_submit_command(vn_ring, submit);
+        if (cmd_data != local_cmd_data)
+            free(cmd_data);
+    }
+}
+
+static inline void vn_submit_vkGetPhysicalDevicePresentRectanglesKHR(struct vn_ring *vn_ring, VkCommandFlagsEXT cmd_flags, VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, uint32_t* pRectCount, VkRect2D* pRects, struct vn_ring_submit_command *submit)
+{
+    uint8_t local_cmd_data[VN_SUBMIT_LOCAL_CMD_SIZE];
+    void *cmd_data = local_cmd_data;
+    size_t cmd_size = vn_sizeof_vkGetPhysicalDevicePresentRectanglesKHR(physicalDevice, surface, pRectCount, pRects);
+    if (cmd_size > sizeof(local_cmd_data)) {
+        cmd_data = malloc(cmd_size);
+        if (!cmd_data)
+            cmd_size = 0;
+    }
+    const size_t reply_size = cmd_flags & VK_COMMAND_GENERATE_REPLY_BIT_EXT ? vn_sizeof_vkGetPhysicalDevicePresentRectanglesKHR_reply(physicalDevice, surface, pRectCount, pRects) : 0;
+
+    struct vn_cs_encoder *enc = vn_ring_submit_command_init(vn_ring, submit, cmd_data, cmd_size, reply_size);
+    if (cmd_size) {
+        vn_encode_vkGetPhysicalDevicePresentRectanglesKHR(enc, cmd_flags, physicalDevice, surface, pRectCount, pRects);
+        vn_ring_submit_command(vn_ring, submit);
+        if (cmd_data != local_cmd_data)
+            free(cmd_data);
+    }
+}
+
 static inline void vn_submit_vkGetPhysicalDeviceMultisamplePropertiesEXT(struct vn_ring *vn_ring, VkCommandFlagsEXT cmd_flags, VkPhysicalDevice physicalDevice, VkSampleCountFlagBits samples, VkMultisamplePropertiesEXT* pMultisampleProperties, struct vn_ring_submit_command *submit)
 {
     uint8_t local_cmd_data[VN_SUBMIT_LOCAL_CMD_SIZE];
@@ -39752,6 +41053,48 @@ static inline void vn_submit_vkGetPhysicalDeviceMultisamplePropertiesEXT(struct 
     struct vn_cs_encoder *enc = vn_ring_submit_command_init(vn_ring, submit, cmd_data, cmd_size, reply_size);
     if (cmd_size) {
         vn_encode_vkGetPhysicalDeviceMultisamplePropertiesEXT(enc, cmd_flags, physicalDevice, samples, pMultisampleProperties);
+        vn_ring_submit_command(vn_ring, submit);
+        if (cmd_data != local_cmd_data)
+            free(cmd_data);
+    }
+}
+
+static inline void vn_submit_vkGetPhysicalDeviceSurfaceCapabilities2KHR(struct vn_ring *vn_ring, VkCommandFlagsEXT cmd_flags, VkPhysicalDevice physicalDevice, const VkPhysicalDeviceSurfaceInfo2KHR* pSurfaceInfo, VkSurfaceCapabilities2KHR* pSurfaceCapabilities, struct vn_ring_submit_command *submit)
+{
+    uint8_t local_cmd_data[VN_SUBMIT_LOCAL_CMD_SIZE];
+    void *cmd_data = local_cmd_data;
+    size_t cmd_size = vn_sizeof_vkGetPhysicalDeviceSurfaceCapabilities2KHR(physicalDevice, pSurfaceInfo, pSurfaceCapabilities);
+    if (cmd_size > sizeof(local_cmd_data)) {
+        cmd_data = malloc(cmd_size);
+        if (!cmd_data)
+            cmd_size = 0;
+    }
+    const size_t reply_size = cmd_flags & VK_COMMAND_GENERATE_REPLY_BIT_EXT ? vn_sizeof_vkGetPhysicalDeviceSurfaceCapabilities2KHR_reply(physicalDevice, pSurfaceInfo, pSurfaceCapabilities) : 0;
+
+    struct vn_cs_encoder *enc = vn_ring_submit_command_init(vn_ring, submit, cmd_data, cmd_size, reply_size);
+    if (cmd_size) {
+        vn_encode_vkGetPhysicalDeviceSurfaceCapabilities2KHR(enc, cmd_flags, physicalDevice, pSurfaceInfo, pSurfaceCapabilities);
+        vn_ring_submit_command(vn_ring, submit);
+        if (cmd_data != local_cmd_data)
+            free(cmd_data);
+    }
+}
+
+static inline void vn_submit_vkGetPhysicalDeviceSurfaceFormats2KHR(struct vn_ring *vn_ring, VkCommandFlagsEXT cmd_flags, VkPhysicalDevice physicalDevice, const VkPhysicalDeviceSurfaceInfo2KHR* pSurfaceInfo, uint32_t* pSurfaceFormatCount, VkSurfaceFormat2KHR* pSurfaceFormats, struct vn_ring_submit_command *submit)
+{
+    uint8_t local_cmd_data[VN_SUBMIT_LOCAL_CMD_SIZE];
+    void *cmd_data = local_cmd_data;
+    size_t cmd_size = vn_sizeof_vkGetPhysicalDeviceSurfaceFormats2KHR(physicalDevice, pSurfaceInfo, pSurfaceFormatCount, pSurfaceFormats);
+    if (cmd_size > sizeof(local_cmd_data)) {
+        cmd_data = malloc(cmd_size);
+        if (!cmd_data)
+            cmd_size = 0;
+    }
+    const size_t reply_size = cmd_flags & VK_COMMAND_GENERATE_REPLY_BIT_EXT ? vn_sizeof_vkGetPhysicalDeviceSurfaceFormats2KHR_reply(physicalDevice, pSurfaceInfo, pSurfaceFormatCount, pSurfaceFormats) : 0;
+
+    struct vn_cs_encoder *enc = vn_ring_submit_command_init(vn_ring, submit, cmd_data, cmd_size, reply_size);
+    if (cmd_size) {
+        vn_encode_vkGetPhysicalDeviceSurfaceFormats2KHR(enc, cmd_flags, physicalDevice, pSurfaceInfo, pSurfaceFormatCount, pSurfaceFormats);
         vn_ring_submit_command(vn_ring, submit);
         if (cmd_data != local_cmd_data)
             free(cmd_data);
@@ -40176,6 +41519,94 @@ static inline void vn_async_vkGetPhysicalDeviceSparseImageFormatProperties(struc
     vn_submit_vkGetPhysicalDeviceSparseImageFormatProperties(vn_ring, 0, physicalDevice, format, type, samples, usage, tiling, pPropertyCount, pProperties, &submit);
 }
 
+static inline VkResult vn_call_vkGetPhysicalDeviceSurfaceSupportKHR(struct vn_ring *vn_ring, VkPhysicalDevice physicalDevice, uint32_t queueFamilyIndex, VkSurfaceKHR surface, VkBool32* pSupported)
+{
+    VN_TRACE_FUNC();
+
+    struct vn_ring_submit_command submit;
+    vn_submit_vkGetPhysicalDeviceSurfaceSupportKHR(vn_ring, VK_COMMAND_GENERATE_REPLY_BIT_EXT, physicalDevice, queueFamilyIndex, surface, pSupported, &submit);
+    struct vn_cs_decoder *dec = vn_ring_get_command_reply(vn_ring, &submit);
+    if (dec) {
+        const VkResult ret = vn_decode_vkGetPhysicalDeviceSurfaceSupportKHR_reply(dec, physicalDevice, queueFamilyIndex, surface, pSupported);
+        vn_ring_free_command_reply(vn_ring, &submit);
+        return ret;
+    } else {
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+}
+
+static inline void vn_async_vkGetPhysicalDeviceSurfaceSupportKHR(struct vn_ring *vn_ring, VkPhysicalDevice physicalDevice, uint32_t queueFamilyIndex, VkSurfaceKHR surface, VkBool32* pSupported)
+{
+    struct vn_ring_submit_command submit;
+    vn_submit_vkGetPhysicalDeviceSurfaceSupportKHR(vn_ring, 0, physicalDevice, queueFamilyIndex, surface, pSupported, &submit);
+}
+
+static inline VkResult vn_call_vkGetPhysicalDeviceSurfaceCapabilitiesKHR(struct vn_ring *vn_ring, VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, VkSurfaceCapabilitiesKHR* pSurfaceCapabilities)
+{
+    VN_TRACE_FUNC();
+
+    struct vn_ring_submit_command submit;
+    vn_submit_vkGetPhysicalDeviceSurfaceCapabilitiesKHR(vn_ring, VK_COMMAND_GENERATE_REPLY_BIT_EXT, physicalDevice, surface, pSurfaceCapabilities, &submit);
+    struct vn_cs_decoder *dec = vn_ring_get_command_reply(vn_ring, &submit);
+    if (dec) {
+        const VkResult ret = vn_decode_vkGetPhysicalDeviceSurfaceCapabilitiesKHR_reply(dec, physicalDevice, surface, pSurfaceCapabilities);
+        vn_ring_free_command_reply(vn_ring, &submit);
+        return ret;
+    } else {
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+}
+
+static inline void vn_async_vkGetPhysicalDeviceSurfaceCapabilitiesKHR(struct vn_ring *vn_ring, VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, VkSurfaceCapabilitiesKHR* pSurfaceCapabilities)
+{
+    struct vn_ring_submit_command submit;
+    vn_submit_vkGetPhysicalDeviceSurfaceCapabilitiesKHR(vn_ring, 0, physicalDevice, surface, pSurfaceCapabilities, &submit);
+}
+
+static inline VkResult vn_call_vkGetPhysicalDeviceSurfaceFormatsKHR(struct vn_ring *vn_ring, VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, uint32_t* pSurfaceFormatCount, VkSurfaceFormatKHR* pSurfaceFormats)
+{
+    VN_TRACE_FUNC();
+
+    struct vn_ring_submit_command submit;
+    vn_submit_vkGetPhysicalDeviceSurfaceFormatsKHR(vn_ring, VK_COMMAND_GENERATE_REPLY_BIT_EXT, physicalDevice, surface, pSurfaceFormatCount, pSurfaceFormats, &submit);
+    struct vn_cs_decoder *dec = vn_ring_get_command_reply(vn_ring, &submit);
+    if (dec) {
+        const VkResult ret = vn_decode_vkGetPhysicalDeviceSurfaceFormatsKHR_reply(dec, physicalDevice, surface, pSurfaceFormatCount, pSurfaceFormats);
+        vn_ring_free_command_reply(vn_ring, &submit);
+        return ret;
+    } else {
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+}
+
+static inline void vn_async_vkGetPhysicalDeviceSurfaceFormatsKHR(struct vn_ring *vn_ring, VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, uint32_t* pSurfaceFormatCount, VkSurfaceFormatKHR* pSurfaceFormats)
+{
+    struct vn_ring_submit_command submit;
+    vn_submit_vkGetPhysicalDeviceSurfaceFormatsKHR(vn_ring, 0, physicalDevice, surface, pSurfaceFormatCount, pSurfaceFormats, &submit);
+}
+
+static inline VkResult vn_call_vkGetPhysicalDeviceSurfacePresentModesKHR(struct vn_ring *vn_ring, VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, uint32_t* pPresentModeCount, VkPresentModeKHR* pPresentModes)
+{
+    VN_TRACE_FUNC();
+
+    struct vn_ring_submit_command submit;
+    vn_submit_vkGetPhysicalDeviceSurfacePresentModesKHR(vn_ring, VK_COMMAND_GENERATE_REPLY_BIT_EXT, physicalDevice, surface, pPresentModeCount, pPresentModes, &submit);
+    struct vn_cs_decoder *dec = vn_ring_get_command_reply(vn_ring, &submit);
+    if (dec) {
+        const VkResult ret = vn_decode_vkGetPhysicalDeviceSurfacePresentModesKHR_reply(dec, physicalDevice, surface, pPresentModeCount, pPresentModes);
+        vn_ring_free_command_reply(vn_ring, &submit);
+        return ret;
+    } else {
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+}
+
+static inline void vn_async_vkGetPhysicalDeviceSurfacePresentModesKHR(struct vn_ring *vn_ring, VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, uint32_t* pPresentModeCount, VkPresentModeKHR* pPresentModes)
+{
+    struct vn_ring_submit_command submit;
+    vn_submit_vkGetPhysicalDeviceSurfacePresentModesKHR(vn_ring, 0, physicalDevice, surface, pPresentModeCount, pPresentModes, &submit);
+}
+
 static inline void vn_call_vkGetPhysicalDeviceFeatures2(struct vn_ring *vn_ring, VkPhysicalDevice physicalDevice, VkPhysicalDeviceFeatures2* pFeatures)
 {
     VN_TRACE_FUNC();
@@ -40410,6 +41841,72 @@ static inline void vn_async_vkGetDeviceGroupPeerMemoryFeatures(struct vn_ring *v
     vn_submit_vkGetDeviceGroupPeerMemoryFeatures(vn_ring, 0, device, heapIndex, localDeviceIndex, remoteDeviceIndex, pPeerMemoryFeatures, &submit);
 }
 
+static inline VkResult vn_call_vkGetDeviceGroupPresentCapabilitiesKHR(struct vn_ring *vn_ring, VkDevice device, VkDeviceGroupPresentCapabilitiesKHR* pDeviceGroupPresentCapabilities)
+{
+    VN_TRACE_FUNC();
+
+    struct vn_ring_submit_command submit;
+    vn_submit_vkGetDeviceGroupPresentCapabilitiesKHR(vn_ring, VK_COMMAND_GENERATE_REPLY_BIT_EXT, device, pDeviceGroupPresentCapabilities, &submit);
+    struct vn_cs_decoder *dec = vn_ring_get_command_reply(vn_ring, &submit);
+    if (dec) {
+        const VkResult ret = vn_decode_vkGetDeviceGroupPresentCapabilitiesKHR_reply(dec, device, pDeviceGroupPresentCapabilities);
+        vn_ring_free_command_reply(vn_ring, &submit);
+        return ret;
+    } else {
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+}
+
+static inline void vn_async_vkGetDeviceGroupPresentCapabilitiesKHR(struct vn_ring *vn_ring, VkDevice device, VkDeviceGroupPresentCapabilitiesKHR* pDeviceGroupPresentCapabilities)
+{
+    struct vn_ring_submit_command submit;
+    vn_submit_vkGetDeviceGroupPresentCapabilitiesKHR(vn_ring, 0, device, pDeviceGroupPresentCapabilities, &submit);
+}
+
+static inline VkResult vn_call_vkGetDeviceGroupSurfacePresentModesKHR(struct vn_ring *vn_ring, VkDevice device, VkSurfaceKHR surface, VkDeviceGroupPresentModeFlagsKHR* pModes)
+{
+    VN_TRACE_FUNC();
+
+    struct vn_ring_submit_command submit;
+    vn_submit_vkGetDeviceGroupSurfacePresentModesKHR(vn_ring, VK_COMMAND_GENERATE_REPLY_BIT_EXT, device, surface, pModes, &submit);
+    struct vn_cs_decoder *dec = vn_ring_get_command_reply(vn_ring, &submit);
+    if (dec) {
+        const VkResult ret = vn_decode_vkGetDeviceGroupSurfacePresentModesKHR_reply(dec, device, surface, pModes);
+        vn_ring_free_command_reply(vn_ring, &submit);
+        return ret;
+    } else {
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+}
+
+static inline void vn_async_vkGetDeviceGroupSurfacePresentModesKHR(struct vn_ring *vn_ring, VkDevice device, VkSurfaceKHR surface, VkDeviceGroupPresentModeFlagsKHR* pModes)
+{
+    struct vn_ring_submit_command submit;
+    vn_submit_vkGetDeviceGroupSurfacePresentModesKHR(vn_ring, 0, device, surface, pModes, &submit);
+}
+
+static inline VkResult vn_call_vkGetPhysicalDevicePresentRectanglesKHR(struct vn_ring *vn_ring, VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, uint32_t* pRectCount, VkRect2D* pRects)
+{
+    VN_TRACE_FUNC();
+
+    struct vn_ring_submit_command submit;
+    vn_submit_vkGetPhysicalDevicePresentRectanglesKHR(vn_ring, VK_COMMAND_GENERATE_REPLY_BIT_EXT, physicalDevice, surface, pRectCount, pRects, &submit);
+    struct vn_cs_decoder *dec = vn_ring_get_command_reply(vn_ring, &submit);
+    if (dec) {
+        const VkResult ret = vn_decode_vkGetPhysicalDevicePresentRectanglesKHR_reply(dec, physicalDevice, surface, pRectCount, pRects);
+        vn_ring_free_command_reply(vn_ring, &submit);
+        return ret;
+    } else {
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+}
+
+static inline void vn_async_vkGetPhysicalDevicePresentRectanglesKHR(struct vn_ring *vn_ring, VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, uint32_t* pRectCount, VkRect2D* pRects)
+{
+    struct vn_ring_submit_command submit;
+    vn_submit_vkGetPhysicalDevicePresentRectanglesKHR(vn_ring, 0, physicalDevice, surface, pRectCount, pRects, &submit);
+}
+
 static inline void vn_call_vkGetPhysicalDeviceMultisamplePropertiesEXT(struct vn_ring *vn_ring, VkPhysicalDevice physicalDevice, VkSampleCountFlagBits samples, VkMultisamplePropertiesEXT* pMultisampleProperties)
 {
     VN_TRACE_FUNC();
@@ -40427,6 +41924,50 @@ static inline void vn_async_vkGetPhysicalDeviceMultisamplePropertiesEXT(struct v
 {
     struct vn_ring_submit_command submit;
     vn_submit_vkGetPhysicalDeviceMultisamplePropertiesEXT(vn_ring, 0, physicalDevice, samples, pMultisampleProperties, &submit);
+}
+
+static inline VkResult vn_call_vkGetPhysicalDeviceSurfaceCapabilities2KHR(struct vn_ring *vn_ring, VkPhysicalDevice physicalDevice, const VkPhysicalDeviceSurfaceInfo2KHR* pSurfaceInfo, VkSurfaceCapabilities2KHR* pSurfaceCapabilities)
+{
+    VN_TRACE_FUNC();
+
+    struct vn_ring_submit_command submit;
+    vn_submit_vkGetPhysicalDeviceSurfaceCapabilities2KHR(vn_ring, VK_COMMAND_GENERATE_REPLY_BIT_EXT, physicalDevice, pSurfaceInfo, pSurfaceCapabilities, &submit);
+    struct vn_cs_decoder *dec = vn_ring_get_command_reply(vn_ring, &submit);
+    if (dec) {
+        const VkResult ret = vn_decode_vkGetPhysicalDeviceSurfaceCapabilities2KHR_reply(dec, physicalDevice, pSurfaceInfo, pSurfaceCapabilities);
+        vn_ring_free_command_reply(vn_ring, &submit);
+        return ret;
+    } else {
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+}
+
+static inline void vn_async_vkGetPhysicalDeviceSurfaceCapabilities2KHR(struct vn_ring *vn_ring, VkPhysicalDevice physicalDevice, const VkPhysicalDeviceSurfaceInfo2KHR* pSurfaceInfo, VkSurfaceCapabilities2KHR* pSurfaceCapabilities)
+{
+    struct vn_ring_submit_command submit;
+    vn_submit_vkGetPhysicalDeviceSurfaceCapabilities2KHR(vn_ring, 0, physicalDevice, pSurfaceInfo, pSurfaceCapabilities, &submit);
+}
+
+static inline VkResult vn_call_vkGetPhysicalDeviceSurfaceFormats2KHR(struct vn_ring *vn_ring, VkPhysicalDevice physicalDevice, const VkPhysicalDeviceSurfaceInfo2KHR* pSurfaceInfo, uint32_t* pSurfaceFormatCount, VkSurfaceFormat2KHR* pSurfaceFormats)
+{
+    VN_TRACE_FUNC();
+
+    struct vn_ring_submit_command submit;
+    vn_submit_vkGetPhysicalDeviceSurfaceFormats2KHR(vn_ring, VK_COMMAND_GENERATE_REPLY_BIT_EXT, physicalDevice, pSurfaceInfo, pSurfaceFormatCount, pSurfaceFormats, &submit);
+    struct vn_cs_decoder *dec = vn_ring_get_command_reply(vn_ring, &submit);
+    if (dec) {
+        const VkResult ret = vn_decode_vkGetPhysicalDeviceSurfaceFormats2KHR_reply(dec, physicalDevice, pSurfaceInfo, pSurfaceFormatCount, pSurfaceFormats);
+        vn_ring_free_command_reply(vn_ring, &submit);
+        return ret;
+    } else {
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+}
+
+static inline void vn_async_vkGetPhysicalDeviceSurfaceFormats2KHR(struct vn_ring *vn_ring, VkPhysicalDevice physicalDevice, const VkPhysicalDeviceSurfaceInfo2KHR* pSurfaceInfo, uint32_t* pSurfaceFormatCount, VkSurfaceFormat2KHR* pSurfaceFormats)
+{
+    struct vn_ring_submit_command submit;
+    vn_submit_vkGetPhysicalDeviceSurfaceFormats2KHR(vn_ring, 0, physicalDevice, pSurfaceInfo, pSurfaceFormatCount, pSurfaceFormats, &submit);
 }
 
 static inline void vn_call_vkGetDeviceQueue2(struct vn_ring *vn_ring, VkDevice device, const VkDeviceQueueInfo2* pQueueInfo, VkQueue* pQueue)
