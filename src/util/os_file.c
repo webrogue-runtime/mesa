@@ -55,6 +55,12 @@ os_dupfd_cloexec(int fd)
     */
    return dup(fd);
 }
+#elif DETECT_OS_WASI
+int
+os_dupfd_cloexec(int fd)
+{
+   abort();
+}
 #else
 int
 os_dupfd_cloexec(int fd)

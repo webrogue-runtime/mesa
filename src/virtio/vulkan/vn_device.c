@@ -275,6 +275,7 @@ vn_device_fix_create_info(const struct vn_device *dev,
             VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME;
       }
 
+#if !DETECT_OS_WASI
       if (app_exts->KHR_swapchain) {
          /* see vn_physical_device_get_native_extensions */
          block_exts[block_count++] = VK_KHR_PRESENT_ID_EXTENSION_NAME;
@@ -293,6 +294,7 @@ vn_device_fix_create_info(const struct vn_device *dev,
          block_exts[block_count++] = VK_EXT_HDR_METADATA_EXTENSION_NAME;
          block_exts[block_count++] = VK_EXT_DISPLAY_CONTROL_EXTENSION_NAME;
       }
+#endif
 
       if (app_exts->ANDROID_native_buffer) {
          /* see vn_QueueSignalReleaseImageANDROID */
@@ -326,11 +328,13 @@ vn_device_fix_create_info(const struct vn_device *dev,
       }
    }
 
+#if !DETECT_OS_WASI
    /* see vn_queue_submission_count_batch_semaphores */
    if (!app_exts->KHR_external_semaphore_fd && has_wsi) {
       assert(physical_dev->renderer_sync_fd.semaphore_importable);
       extra_exts[extra_count++] = VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME;
    }
+#endif
 
    /* see vn_cmd_set_external_acquire_unmodified */
    if (VN_PRESENT_SRC_INTERNAL_LAYOUT != VK_IMAGE_LAYOUT_PRESENT_SRC_KHR &&
@@ -602,6 +606,27 @@ vn_CreateDevice(VkPhysicalDevice physicalDevice,
                                              &vn_device_entrypoints, true);
    vk_device_dispatch_table_from_entrypoints(&dispatch_table,
                                              &wsi_device_entrypoints, false);
+#if DETECT_OS_WASI
+   // WASM weak static linking bug workaround
+   if(dispatch_table.CreatePipelineLayout == NULL) {
+      abort();
+   } else {
+      assert(dispatch_table.CreatePipelineLayout == vn_CreatePipelineLayout);
+      dispatch_table.CreatePipelineLayout = vn_CreatePipelineLayout;
+   }
+   if(dispatch_table.CreateFramebuffer == NULL) {
+      abort();
+   } else {
+      assert(dispatch_table.CreateFramebuffer == vn_CreateFramebuffer);
+      dispatch_table.CreateFramebuffer = vn_CreateFramebuffer;
+   }
+   if(dispatch_table.CreateSwapchainKHR == NULL) {
+      abort();
+   } else {
+      assert(dispatch_table.CreateSwapchainKHR == vn_CreateSwapchainKHR);
+      dispatch_table.CreateSwapchainKHR = vn_CreateSwapchainKHR;
+   }
+#endif
    result = vn_device_base_init(&dev->base, &physical_dev->base,
                                 &dispatch_table, pCreateInfo, alloc);
    if (result != VK_SUCCESS) {

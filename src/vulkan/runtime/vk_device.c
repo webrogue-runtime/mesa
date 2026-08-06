@@ -155,6 +155,22 @@ vk_device_default_robust_image_behavior(const struct vk_device *device)
    }
 }
 
+
+#if DETECT_OS_WASI
+
+#ifdef vk_common_GetBufferMemoryRequirements
+#undef vk_common_GetBufferMemoryRequirements
+#endif
+VKAPI_ATTR void VKAPI_CALL vk_common_GetBufferMemoryRequirements(VkDevice device, VkBuffer buffer, VkMemoryRequirements* pMemoryRequirements);
+
+
+#ifdef vk_common_CreatePipelineLayout
+#undef vk_common_CreatePipelineLayout
+#endif
+VKAPI_ATTR VkResult VKAPI_CALL vk_common_CreatePipelineLayout(VkDevice device, const VkPipelineLayoutCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkPipelineLayout* pPipelineLayout);
+
+#endif
+
 VkResult
 vk_device_init(struct vk_device *device,
                struct vk_physical_device *physical_device,
@@ -177,6 +193,15 @@ vk_device_init(struct vk_device *device,
       /* Add common entrypoints without overwriting driver-provided ones. */
       vk_device_dispatch_table_from_entrypoints(
          &device->dispatch_table, &vk_common_device_entrypoints, false);
+#if DETECT_OS_WASI
+      // WASM weak static linking bug workaround
+      if(device->dispatch_table.GetBufferMemoryRequirements == NULL) {
+         abort();
+      } else {
+         assert(device->dispatch_table.GetBufferMemoryRequirements == vk_common_GetBufferMemoryRequirements);
+         device->dispatch_table.GetBufferMemoryRequirements = vk_common_GetBufferMemoryRequirements;
+      }
+#endif
    }
 
    for (uint32_t i = 0; i < pCreateInfo->enabledExtensionCount; i++) {

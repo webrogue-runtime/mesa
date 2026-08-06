@@ -482,6 +482,7 @@ with_platform_wayland = _platforms.contains('wayland')
 with_platform_haiku = _platforms.contains('haiku')
 with_platform_windows = _platforms.contains('windows')
 with_platform_macos = _platforms.contains('macos')
+with_platform_webrogue = _platforms.contains('webrogue')
 
 with_gfxstream_emulated_android = with_gfxstream_vk and with_platform_android and host_machine.system() == 'linux'
 if with_gfxstream_emulated_android
@@ -554,7 +555,7 @@ with_xlib_lease = get_option('xlib-lease') \
   .allowed()
 
 with_egl = get_option('egl') \
-  .require(with_platform_windows or with_platform_haiku or with_dri or with_platform_android, error_message : 'EGL requires DRI, Haiku, Windows or Android') \
+  .require(with_platform_windows or with_platform_haiku or with_dri or with_platform_android or with_platform_webrogue, error_message : 'EGL requires DRI, Haiku, Windows, Android or Webrogue') \
   .require(with_glx != 'xlib', error_message :'EGL requires DRI, but GLX is being built with xlib support') \
   .disable_auto_if(with_platform_haiku) \
   .allowed()
@@ -1109,7 +1110,7 @@ if cc.get_id() == 'gcc' and cc.version().version_compare('< 4.4.6')
 endif
 
 # Support systems without ETIME (e.g. FreeBSD)
-if cc.get_define('ETIME', prefix : '#include <errno.h>') == ''
+if with_platform_webrogue or cc.get_define('ETIME', prefix : '#include <errno.h>') == ''
   pre_args += '-DETIME=ETIMEDOUT'
 endif
 
@@ -1476,7 +1477,7 @@ if cc.compiles('''#include <stdint.h>
   #
   # This can happen for 64-bit atomic operations on 32-bit architectures such
   # as ARM.
-  if not cc.links('''#include <stdint.h>
+  if host_machine.cpu_family() != 'wasm' and not cc.links('''#include <stdint.h>
                      int main() {
                        struct {
                          uint64_t *v;
@@ -1674,7 +1675,7 @@ ld_args_build_id = cc.get_supported_link_arguments('-Wl,--build-id=sha1')
 
 # check for dl support
 dep_dl = null_dep
-if host_machine.system() != 'windows'
+if host_machine.cpu_family() != 'wasm' and host_machine.system() != 'windows'
   if not cc.has_function('dlopen')
     dep_dl = cc.find_library('dl', required : true)
   endif
@@ -1695,7 +1696,7 @@ if with_any_intel and ['x86', 'x86_64'].contains(host_machine.cpu_family())
 endif
 
 # Determine whether or not the rt library is needed for time functions
-if host_machine.system() == 'windows' or cc.has_function('clock_gettime')
+if host_machine.system() == 'windows' or host_machine.cpu_family() == 'wasm' or cc.has_function('clock_gettime')
   dep_clock = null_dep
 else
   dep_clock = cc.find_library('rt')
@@ -2173,6 +2174,12 @@ if with_platform_wayland
   endif
   # This can be renamed just `wayland` when we require at least 1.8
   mod_wl = import('unstable-wayland')
+endif
+
+if with_platform_webrogue
+  webroguegfx_inc = include_directories(fs.parent(meson.project_source_root()))
+  #my_lib = static_library(...)
+  dep_webroguegfx = declare_dependency(include_directories : webroguegfx_inc)
 endif
 
 # Even if we find OpenMP, Gitlab CI fails to link with gcc/i386 and clang/anyarch.

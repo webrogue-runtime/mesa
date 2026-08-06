@@ -182,6 +182,12 @@ __getProgramName()
     else
         return strdup(__progname);
 }
+#elif DETECT_OS_WASI
+static char *
+__getProgramName()
+{
+   return NULL;
+}
 #else
 #pragma message ( "Warning: Per application configuration won't work with your OS version." )
 static char *

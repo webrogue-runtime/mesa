@@ -402,7 +402,7 @@ debug_get_option_ ## suffix (void) \
 static inline bool
 __normal_user(void)
 {
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(__wasi__)
    return true;
 #else
    return geteuid() == getuid() && getegid() == getgid();
