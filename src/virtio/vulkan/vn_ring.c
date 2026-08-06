@@ -5,7 +5,7 @@
 
 #include "vn_ring.h"
 
-#if !DETECT_OS_WINDOWS
+#if !DETECT_OS_WINDOWS && !DETECT_OS_WASI
 #include <sys/resource.h>
 #endif
 
@@ -110,9 +110,18 @@ vn_ring_store_tail(struct vn_ring *ring)
                                 memory_order_seq_cst);
 }
 
+static inline bool
+vn_ring_has_sync_transport(const struct vn_ring *ring)
+{
+   return ring->instance->renderer->info.has_sync_transport;
+}
+
 uint32_t
 vn_ring_load_status(const struct vn_ring *ring)
 {
+   if (vn_ring_has_sync_transport(ring))
+      return 0;
+
    /* must be called and ordered after vn_ring_store_tail for idle status */
    return atomic_load_explicit(ring->shared.status, memory_order_seq_cst);
 }
@@ -120,6 +129,9 @@ vn_ring_load_status(const struct vn_ring *ring)
 void
 vn_ring_unset_status_bits(struct vn_ring *ring, uint32_t mask)
 {
+   if (vn_ring_has_sync_transport(ring))
+      return;
+
    atomic_fetch_and_explicit(ring->shared.status, ~mask,
                              memory_order_seq_cst);
 }
@@ -175,12 +187,20 @@ vn_ring_retire_submits(struct vn_ring *ring, uint32_t seqno)
 bool
 vn_ring_get_seqno_status(struct vn_ring *ring, uint32_t seqno)
 {
+   if (vn_ring_has_sync_transport(ring)) {
+      /* submissions are synchronous; there is nothing to wait for */
+      return true;
+   }
+
    return vn_ring_ge_seqno(ring, vn_ring_load_head(ring), seqno);
 }
 
 void
 vn_ring_wait_seqno(struct vn_ring *ring, uint32_t seqno)
 {
+   if (vn_ring_has_sync_transport(ring))
+      return;
+
    /* A renderer wait incurs several hops and the renderer might poll
     * repeatedly anyway.  Let's just poll here.
     */
@@ -200,6 +220,9 @@ vn_ring_wait_seqno(struct vn_ring *ring, uint32_t seqno)
 void
 vn_ring_wait_all(struct vn_ring *ring)
 {
+   if (vn_ring_has_sync_transport(ring))
+      return;
+
    /* load from tail rather than ring->cur for atomicity */
    const uint32_t pending_seqno =
       atomic_load_explicit(ring->shared.tail, memory_order_relaxed);
@@ -291,6 +314,14 @@ vn_ring_create(struct vn_instance *instance,
 
    ring->id = (uintptr_t)ring;
    ring->instance = instance;
+
+   if (vn_ring_has_sync_transport(ring)) {
+      mtx_init(&ring->mutex, mtx_plain);
+      mtx_init(&ring->roundtrip_mutex, mtx_plain);
+      ring->roundtrip_next = 1;
+      return ring;
+   }
+
    ring->shmem =
       vn_renderer_shmem_create(instance->renderer, layout->shmem_size);
    if (!ring->shmem) {
@@ -332,13 +363,13 @@ vn_ring_create(struct vn_instance *instance,
     * VK_MESA_VENUS_PROTOCOL_SPEC_VERSION >= 2  */
    int prio = 0;
    bool ring_priority = false;
-#if !DETECT_OS_WINDOWS
+#if !DETECT_OS_WINDOWS && !DETECT_OS_WASI
    if (instance->renderer->info.vk_mesa_venus_protocol_spec_version >= 2) {
       errno = 0;
       prio = getpriority(PRIO_PROCESS, 0);
       ring_priority = is_tls_ring && !(prio == -1 && errno);
    }
-#endif /* !DETECT_OS_WINDOWS */
+#endif /* !DETECT_OS_WINDOWS && !DETECT_OS_WASI */
    const struct VkRingPriorityInfoMESA priority_info = {
       .sType = VK_STRUCTURE_TYPE_RING_PRIORITY_INFO_MESA,
       .priority = prio,
@@ -379,6 +410,13 @@ vn_ring_destroy(struct vn_ring *ring)
    VN_TRACE_FUNC();
 
    const VkAllocationCallbacks *alloc = &ring->instance->base.vk.alloc;
+
+   if (vn_ring_has_sync_transport(ring)) {
+      mtx_destroy(&ring->roundtrip_mutex);
+      mtx_destroy(&ring->mutex);
+      vk_free(alloc, ring);
+      return;
+   }
 
    uint32_t destroy_ring_data[4];
    struct vn_cs_encoder local_enc = VN_CS_ENCODER_INITIALIZER_LOCAL(
@@ -657,10 +695,106 @@ vn_ring_submit_locked(struct vn_ring *ring,
    return VK_SUCCESS;
 }
 
+static VkResult
+vn_ring_submit_sync_locked(struct vn_ring *ring,
+                           const struct vn_cs_encoder *cs,
+                           struct vn_renderer_shmem *reply_shmem,
+                           size_t reply_offset,
+                           size_t reply_size)
+{
+   struct vn_renderer *renderer = ring->instance->renderer;
+   const bool set_reply = reply_shmem != NULL;
+
+   const struct VkCommandStreamDescriptionMESA reply_stream = {
+      .resourceId = set_reply ? reply_shmem->res_id : 0,
+      .offset = reply_offset,
+      .size = reply_size,
+   };
+   const size_t set_reply_size =
+      set_reply ? vn_sizeof_vkSetReplyCommandStreamMESA(&reply_stream) : 0;
+
+   const bool indirect = cs->storage_type != VN_CS_ENCODER_STORAGE_POINTER;
+
+   STACK_ARRAY(VkCommandStreamDescriptionMESA, descs,
+               indirect ? cs->buffer_count : 1);
+   uint32_t desc_count = 0;
+   if (indirect) {
+      for (uint32_t i = 0; i < cs->buffer_count; i++) {
+         const struct vn_cs_encoder_buffer *buf = &cs->buffers[i];
+         if (buf->committed_size) {
+            descs[desc_count++] = (VkCommandStreamDescriptionMESA){
+               .resourceId = buf->shmem->res_id,
+               .offset = buf->offset,
+               .size = buf->committed_size,
+            };
+         }
+      }
+      assert(desc_count);
+   }
+
+   size_t exec_size = 0;
+   size_t cs_size = 0;
+   if (indirect) {
+      exec_size = vn_sizeof_vkExecuteCommandStreamsMESA(desc_count, descs,
+                                                        NULL, 0, NULL, 0);
+   } else {
+      assert(cs->buffer_count == 1);
+      cs_size = cs->total_committed_size;
+      assert(cs_size == vn_cs_encoder_get_len(cs));
+   }
+
+   const size_t total_size = set_reply_size + exec_size + cs_size;
+
+   uint32_t local_data[512];
+   void *data =
+      total_size <= sizeof(local_data) ? local_data : malloc(total_size);
+   if (!data) {
+      STACK_ARRAY_FINISH(descs);
+      return VK_ERROR_OUT_OF_HOST_MEMORY;
+   }
+
+   struct vn_cs_encoder_buffer flat_buffer =
+      VN_CS_ENCODER_BUFFER_INITIALIZER(data);
+   struct vn_cs_encoder flat =
+      VN_CS_ENCODER_INITIALIZER(&flat_buffer, total_size);
+   if (set_reply)
+      vn_encode_vkSetReplyCommandStreamMESA(&flat, 0, &reply_stream);
+   if (indirect) {
+      vn_encode_vkExecuteCommandStreamsMESA(&flat, 0, desc_count, descs,
+                                            NULL, 0, NULL, 0);
+   }
+   vn_cs_encoder_commit(&flat);
+
+   if (cs_size) {
+      void *dst = flat_buffer.base + vn_cs_encoder_get_len(&flat);
+      memcpy(dst, cs->buffers[0].base, cs_size);
+   }
+
+   const VkResult result =
+      vn_renderer_submit_simple(renderer, data, total_size);
+
+   if (data != local_data)
+      free(data);
+   STACK_ARRAY_FINISH(descs);
+
+   if (result == VK_SUCCESS)
+      ring->cur++;
+
+   return result;
+}
+
 VkResult
 vn_ring_submit_command_simple(struct vn_ring *ring,
                               const struct vn_cs_encoder *cs)
 {
+   if (vn_ring_has_sync_transport(ring)) {
+      mtx_lock(&ring->mutex);
+      const VkResult result =
+         vn_ring_submit_sync_locked(ring, cs, NULL, 0, 0);
+      mtx_unlock(&ring->mutex);
+      return result;
+   }
+
    mtx_lock(&ring->mutex);
    VkResult result = vn_ring_submit_locked(ring, cs, NULL, NULL);
    mtx_unlock(&ring->mutex);
@@ -695,6 +829,38 @@ vn_ring_submit_command(struct vn_ring *ring,
    assert(!vn_cs_encoder_is_empty(&submit->command));
 
    vn_cs_encoder_commit(&submit->command);
+
+   if (vn_ring_has_sync_transport(ring)) {
+      size_t reply_offset = 0;
+      if (submit->reply_size) {
+         submit->reply_shmem = vn_instance_reply_shmem_alloc(
+            ring->instance, submit->reply_size, &reply_offset);
+         if (!submit->reply_shmem)
+            return;
+      }
+
+      mtx_lock(&ring->mutex);
+      submit->ring_seqno = ring->cur;
+      submit->ring_seqno_valid =
+         VK_SUCCESS == vn_ring_submit_sync_locked(ring, &submit->command,
+                                                  submit->reply_shmem,
+                                                  reply_offset,
+                                                  submit->reply_size);
+      mtx_unlock(&ring->mutex);
+
+      if (likely(submit->ring_seqno_valid)) {
+         if (submit->reply_size) {
+            void *reply_ptr = submit->reply_shmem->mmap_ptr + reply_offset;
+            submit->reply =
+               VN_CS_DECODER_INITIALIZER(reply_ptr, submit->reply_size);
+         }
+      } else if (submit->reply_shmem) {
+         vn_renderer_shmem_unref(ring->instance->renderer,
+                                 submit->reply_shmem);
+         submit->reply_shmem = NULL;
+      }
+      return;
+   }
 
    size_t reply_offset = 0;
    if (submit->reply_size) {
@@ -744,6 +910,14 @@ vn_ring_free_command_reply(struct vn_ring *ring,
 VkResult
 vn_ring_submit_roundtrip(struct vn_ring *ring, uint64_t *roundtrip_seqno)
 {
+   if (vn_ring_has_sync_transport(ring)) {
+      mtx_lock(&ring->roundtrip_mutex);
+      const uint64_t seqno = ring->roundtrip_next++;
+      mtx_unlock(&ring->roundtrip_mutex);
+      *roundtrip_seqno = seqno;
+      return VK_SUCCESS;
+   }
+
    uint32_t local_data[8];
    struct vn_cs_encoder local_enc =
       VN_CS_ENCODER_INITIALIZER_LOCAL(local_data, sizeof(local_data));
@@ -763,5 +937,8 @@ vn_ring_submit_roundtrip(struct vn_ring *ring, uint64_t *roundtrip_seqno)
 void
 vn_ring_wait_roundtrip(struct vn_ring *ring, uint64_t roundtrip_seqno)
 {
+   if (vn_ring_has_sync_transport(ring))
+      return;
+
    vn_async_vkWaitVirtqueueSeqnoMESA(ring, roundtrip_seqno);
 }

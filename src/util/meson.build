@@ -13,8 +13,6 @@ endif
 subdir('blake3')
 
 files_mesa_util = files(
-  'anon_file.h',
-  'anon_file.c',
   'bigmath.h',
   'bitscan.c',
   'bitscan.h',
@@ -181,6 +179,10 @@ files_mesa_util = files(
   'mesa_cache_db_multipart.c',
   'mesa_cache_db_multipart.h',
 )
+
+if not with_platform_webrogue
+  files_mesa_util += files('anon_file.h', 'anon_file.c')
+endif
 
 libmesa_util_links = []
 

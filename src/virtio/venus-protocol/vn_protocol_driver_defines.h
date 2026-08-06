@@ -476,6 +476,23 @@ typedef enum VkCommandTypeEXT {
     VK_COMMAND_TYPE_vkGetPhysicalDeviceDescriptorSizeEXT_EXT = 343,
     VK_COMMAND_TYPE_vkRegisterCustomBorderColorEXT_EXT = 344,
     VK_COMMAND_TYPE_vkUnregisterCustomBorderColorEXT_EXT = 345,
+    VK_COMMAND_TYPE_vkCreateSurfaceWEBROGUE_EXT = 500,
+    VK_COMMAND_TYPE_vkDestroySurfaceKHR_EXT = 501,
+    VK_COMMAND_TYPE_vkGetPhysicalDeviceSurfaceSupportKHR_EXT = 502,
+    VK_COMMAND_TYPE_vkGetPhysicalDeviceSurfaceCapabilitiesKHR_EXT = 503,
+    VK_COMMAND_TYPE_vkGetPhysicalDeviceSurfaceFormatsKHR_EXT = 504,
+    VK_COMMAND_TYPE_vkGetPhysicalDeviceSurfacePresentModesKHR_EXT = 505,
+    VK_COMMAND_TYPE_vkCreateSwapchainKHR_EXT = 506,
+    VK_COMMAND_TYPE_vkDestroySwapchainKHR_EXT = 507,
+    VK_COMMAND_TYPE_vkGetSwapchainImagesKHR_EXT = 508,
+    VK_COMMAND_TYPE_vkAcquireNextImageKHR_EXT = 509,
+    VK_COMMAND_TYPE_vkQueuePresentKHR_EXT = 510,
+    VK_COMMAND_TYPE_vkGetDeviceGroupPresentCapabilitiesKHR_EXT = 511,
+    VK_COMMAND_TYPE_vkGetDeviceGroupSurfacePresentModesKHR_EXT = 512,
+    VK_COMMAND_TYPE_vkGetPhysicalDevicePresentRectanglesKHR_EXT = 513,
+    VK_COMMAND_TYPE_vkAcquireNextImage2KHR_EXT = 514,
+    VK_COMMAND_TYPE_vkGetPhysicalDeviceSurfaceCapabilities2KHR_EXT = 515,
+    VK_COMMAND_TYPE_vkGetPhysicalDeviceSurfaceFormats2KHR_EXT = 516,
 } VkCommandTypeEXT;
 
 typedef enum VkCommandFlagBitsEXT {

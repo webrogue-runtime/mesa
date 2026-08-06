@@ -285,7 +285,11 @@ _Noreturn
 void
 thrd_exit(int res)
 {
+#if defined(__wasi__)
+    abort();
+#else
     pthread_exit((void*)(intptr_t)res);
+#endif
 }
 
 // 7.25.5.6

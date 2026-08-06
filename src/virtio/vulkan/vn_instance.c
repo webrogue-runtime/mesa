@@ -36,6 +36,10 @@ static const struct vk_instance_extension_table
       .EXT_debug_report = true,
       .EXT_debug_utils = true,
 
+#if DETECT_OS_WASI
+      .KHR_surface = true,
+      .KHR_get_surface_capabilities2 = true,
+#endif
 #ifdef VN_USE_WSI_PLATFORM
       .KHR_get_surface_capabilities2 = true,
       .KHR_surface = true,
@@ -65,6 +69,9 @@ static const struct vk_instance_extension_table
       .EXT_direct_mode_display = true,
       .EXT_display_surface_counter = true,
       .EXT_acquire_drm_display = true,
+#endif
+#ifdef VK_USE_PLATFORM_WEBROGUE
+      .WEBROGUE_surface = true,
 #endif
    };
 

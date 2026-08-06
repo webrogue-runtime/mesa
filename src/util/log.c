@@ -31,7 +31,7 @@
 #include "util/ralloc.h"
 #include "util/u_debug.h"
 
-#if DETECT_OS_POSIX
+#if DETECT_OS_POSIX && !DETECT_OS_WASI
 #include <syslog.h>
 #include "util/u_process.h"
 #endif
@@ -142,7 +142,7 @@ mesa_log_init_once(void)
 
    mesa_log_file = stderr;
 
-#if !DETECT_OS_WINDOWS
+#if !DETECT_OS_WINDOWS && !DETECT_OS_WASI
    if (__normal_user()) {
       FILE *fp = NULL;
 
@@ -168,7 +168,7 @@ mesa_log_init_once(void)
    }
 #endif
 
-#if DETECT_OS_POSIX
+#if DETECT_OS_POSIX && !DETECT_OS_WASI
    if (mesa_log_control & MESA_LOG_CONTROL_SYSLOG)
       openlog(util_get_process_name(), LOG_NDELAY | LOG_PID, LOG_USER);
 #endif
@@ -316,7 +316,7 @@ logger_file(enum mesa_log_level level,
       free(msg);
 }
 
-#if DETECT_OS_POSIX
+#if DETECT_OS_POSIX && !DETECT_OS_WASI
 
 static inline int
 level_to_syslog(enum mesa_log_level l)
@@ -350,6 +350,25 @@ logger_syslog(enum mesa_log_level level,
 }
 
 #endif /* DETECT_OS_POSIX */
+
+#if DETECT_OS_WASI
+static void
+logger_syslog(enum mesa_log_level level,
+              const char *tag,
+              const char *format,
+              va_list va)
+{
+   char local_msg[1024];
+   char *msg = logger_vasnprintf(local_msg, sizeof(local_msg),
+         LOGGER_VASNPRINTF_AFFIX_TAG, level, tag, format, va);
+
+   printf("%s\n", msg);
+
+   if (msg != local_msg)
+      free(msg);
+}
+
+#endif /* DETECT_OS_WASI */
 
 #if DETECT_OS_ANDROID
 

@@ -723,4 +723,50 @@ vn_decode_VkTensorARM(struct vn_cs_decoder *dec, VkTensorARM *val)
     vn_cs_handle_store_id((void **)val, id, VK_OBJECT_TYPE_TENSOR_ARM);
 }
 
+/* VK_DEFINE_NON_DISPATCHABLE_HANDLE(VkSurfaceKHR) */
+
+static inline size_t
+vn_sizeof_VkSurfaceKHR(const VkSurfaceKHR *val)
+{
+    return sizeof(uint64_t);
+}
+
+static inline void
+vn_encode_VkSurfaceKHR(struct vn_cs_encoder *enc, const VkSurfaceKHR *val)
+{
+    const uint64_t id = vn_cs_handle_load_id((const void **)val, VK_OBJECT_TYPE_SURFACE_KHR);
+    vn_encode_uint64_t(enc, &id);
+}
+
+static inline void
+vn_decode_VkSurfaceKHR(struct vn_cs_decoder *dec, VkSurfaceKHR *val)
+{
+    uint64_t id;
+    vn_decode_uint64_t(dec, &id);
+    vn_cs_handle_store_id((void **)val, id, VK_OBJECT_TYPE_SURFACE_KHR);
+}
+
+/* VK_DEFINE_NON_DISPATCHABLE_HANDLE(VkSwapchainKHR) */
+
+static inline size_t
+vn_sizeof_VkSwapchainKHR(const VkSwapchainKHR *val)
+{
+    return sizeof(uint64_t);
+}
+
+static inline void
+vn_encode_VkSwapchainKHR(struct vn_cs_encoder *enc, const VkSwapchainKHR *val)
+{
+    const uint64_t id = vn_cs_handle_load_id((const void **)val, VK_OBJECT_TYPE_SWAPCHAIN_KHR);
+    vn_encode_uint64_t(enc, &id);
+}
+
+static inline void
+vn_decode_VkSwapchainKHR(struct vn_cs_decoder *dec, VkSwapchainKHR *val)
+{
+    uint64_t id;
+    vn_decode_uint64_t(dec, &id);
+    vn_cs_handle_store_id((void **)val, id, VK_OBJECT_TYPE_SWAPCHAIN_KHR);
+}
+
 #endif /* VN_PROTOCOL_DRIVER_HANDLES_H */

@@ -58,7 +58,7 @@
 #  include <unistd.h>
 #  include <android/log.h>
 #  include <sys/system_properties.h>
-#elif DETECT_OS_LINUX || DETECT_OS_CYGWIN || DETECT_OS_SOLARIS || DETECT_OS_HURD || DETECT_OS_MANAGARM
+#elif DETECT_OS_LINUX || DETECT_OS_CYGWIN || DETECT_OS_SOLARIS || DETECT_OS_HURD || DETECT_OS_MANAGARM || DETECT_OS_WASI
 #  include <unistd.h>
 #elif DETECT_OS_OPENBSD || DETECT_OS_FREEBSD
 #  include <sys/resource.h>
@@ -403,6 +403,8 @@ os_get_total_physical_memory(uint64_t *size)
 #elif DETECT_OS_FUCHSIA
    *size = zx_system_get_physmem();
    return true;
+#elif DETECT_OS_WASI
+   return false;
 #else
 #error unexpected platform in os_misc.c
    return false;

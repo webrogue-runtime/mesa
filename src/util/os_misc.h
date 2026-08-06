@@ -42,7 +42,9 @@
 
 
 #if DETECT_OS_POSIX
-#  include <signal.h> /* for kill() */
+#  if !DETECT_OS_WASI
+#    include <signal.h> /* for kill() */
+#  endif
 #  include <unistd.h> /* getpid() */
 #endif
 

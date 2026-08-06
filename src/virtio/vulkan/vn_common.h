@@ -50,6 +50,7 @@
 
 #if DETECT_OS_WINDOWS
 #include <processthreadsapi.h>
+#elif DETECT_OS_WASI
 #else
 #include <sys/syscall.h>
 
@@ -637,6 +638,12 @@ vn_gettid(void)
    return syscall(SYS_thr_self);
 #elif DETECT_OS_WINDOWS
    return GetCurrentThreadId();
+#elif DETECT_OS_WASI
+   static pid_t counter = 1000;
+   static _Thread_local pid_t tid = 0;
+   if (tid == 0)
+      tid = counter++;
+   return tid;
 #else
    return syscall(SYS_gettid);
 #endif

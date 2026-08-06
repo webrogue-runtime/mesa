@@ -10,7 +10,7 @@
 
 #include "vn_protocol_driver_defines.h"
 
-#define VN_INFO_EXTENSION_MAX_NUMBER (643)
+#define VN_INFO_EXTENSION_MAX_NUMBER (1001)
 
 struct vn_info_extension {
    const char *name;
@@ -19,8 +19,8 @@ struct vn_info_extension {
 };
 
 /* sorted by extension names for bsearch */
-static const uint32_t _vn_info_extension_count = 187;
-static const struct vn_info_extension _vn_info_extensions[187] = {
+static const uint32_t _vn_info_extension_count = 191;
+static const struct vn_info_extension _vn_info_extensions[191] = {
    { "VK_ARM_rasterization_order_attachment_access", 343, 1 },
    { "VK_EXT_4444_formats", 341, 1 },
    { "VK_EXT_attachment_feedback_loop_dynamic_state", 525, 1 },
@@ -150,6 +150,7 @@ static const struct vn_info_extension _vn_info_extensions[187] = {
    { "VK_KHR_fragment_shading_rate", 227, 2 },
    { "VK_KHR_get_memory_requirements2", 147, 1 },
    { "VK_KHR_get_physical_device_properties2", 60, 2 },
+   { "VK_KHR_get_surface_capabilities2", 120, 1 },
    { "VK_KHR_global_priority", 189, 1 },
    { "VK_KHR_image_format_list", 148, 1 },
    { "VK_KHR_imageless_framebuffer", 109, 1 },
@@ -197,6 +198,8 @@ static const struct vn_info_extension _vn_info_extensions[187] = {
    { "VK_KHR_shader_untyped_pointers", 388, 1 },
    { "VK_KHR_spirv_1_4", 237, 1 },
    { "VK_KHR_storage_buffer_storage_class", 132, 1 },
+   { "VK_KHR_surface", 1, 25 },
+   { "VK_KHR_swapchain", 2, 70 },
    { "VK_KHR_synchronization2", 315, 1 },
    { "VK_KHR_timeline_semaphore", 208, 2 },
    { "VK_KHR_uniform_buffer_standard_layout", 254, 1 },
@@ -208,6 +211,7 @@ static const struct vn_info_extension _vn_info_extensions[187] = {
    { "VK_MESA_venus_protocol", 385, 4 },
    { "VK_NV_compute_shader_derivatives", 202, 1 },
    { "VK_VALVE_mutable_descriptor_type", 352, 1 },
+   { "VK_WEBROGUE_surface", 1001, 1 },
 };
 
 static inline uint32_t
