@@ -2,7 +2,7 @@
 #include <unistd.h>
 
 
-#include <webroguegfx/webroguegfx.h>
+#include <libwr4c/wr4c.h>
 #include "drm-uapi/virtgpu_drm.h"
 #include "vn_renderer_internal.h"
 
@@ -54,7 +54,7 @@ webrogue_vcmd_get_capset(struct webrogue *webrogue,
                       void *capset,
                       size_t capset_size)
 {
-   uint32_t size = webroguegfx_vulkan_get_capset(id, version, capset,
+   uint32_t size = wr4c_vulkan_get_capset(id, version, capset,
                                                  capset_size);
    if (!size)
       return false;
@@ -81,7 +81,7 @@ webrogue_vcmd_sync_wait(struct webrogue *webrogue,
       buf[i * 3 + 2] = (uint32_t)(val >> 32);
    }
 
-   int32_t result = (int32_t)webroguegfx_vulkan_sync_wait(flags, timeout,
+   int32_t result = (int32_t)wr4c_vulkan_sync_wait(flags, timeout,
                                           buf,
                                           count ? 3 * count * sizeof(uint32_t) : 0);
    free(buf);
@@ -145,7 +145,7 @@ webrogue_vcmd_submit_cmd2(struct webrogue *webrogue,
       }
    }
 
-   webroguegfx_vulkan_submit_cmd((const uint8_t *)headers,
+   wr4c_vulkan_submit_cmd((const uint8_t *)headers,
                                  5 * batch_count * sizeof(uint32_t),
                                  cmds, cs_size,
                                  syncs, sync_size);
@@ -164,7 +164,7 @@ webrogue_sync_write(struct vn_renderer *renderer,
    struct webrogue_sync *sync = (struct webrogue_sync *)_sync;
 
    mtx_lock(&webrogue->sock_mutex);
-   webroguegfx_vulkan_sync_write(sync->base.sync_id, val);
+   wr4c_vulkan_sync_write(sync->base.sync_id, val);
    mtx_unlock(&webrogue->sock_mutex);
 
    return VK_SUCCESS;
@@ -179,7 +179,7 @@ webrogue_sync_read(struct vn_renderer *renderer,
    struct webrogue_sync *sync = (struct webrogue_sync *)_sync;
 
    mtx_lock(&webrogue->sock_mutex);
-   *val = webroguegfx_vulkan_sync_read(sync->base.sync_id);
+   *val = wr4c_vulkan_sync_read(sync->base.sync_id);
    mtx_unlock(&webrogue->sock_mutex);
 
    return VK_SUCCESS;
@@ -202,7 +202,7 @@ webrogue_sync_destroy(struct vn_renderer *renderer,
    struct webrogue_sync *sync = (struct webrogue_sync *)_sync;
 
    mtx_lock(&webrogue->sock_mutex);
-   webroguegfx_vulkan_sync_unref(sync->base.sync_id);
+   wr4c_vulkan_sync_unref(sync->base.sync_id);
    mtx_unlock(&webrogue->sock_mutex);
 
    free(sync);
@@ -221,7 +221,7 @@ webrogue_sync_create(struct vn_renderer *renderer,
       return VK_ERROR_OUT_OF_HOST_MEMORY;
 
    mtx_lock(&webrogue->sock_mutex);
-   sync->base.sync_id = webroguegfx_vulkan_sync_create(initial_val);
+   sync->base.sync_id = wr4c_vulkan_sync_create(initial_val);
    mtx_unlock(&webrogue->sock_mutex);
 
    *out_sync = &sync->base;
@@ -262,7 +262,7 @@ webrogue_bo_map(struct vn_renderer *renderer,
       if (ptr == NULL) {
          vn_log(webrogue->instance, "failed to allocate %zu bytes", bo->base.mmap_size);
       } else {
-         webroguegfx_vulkan_register_blob(bo->base.res_id, ptr, alloc_size);
+         wr4c_vulkan_register_blob(bo->base.res_id, ptr, alloc_size);
          bo->base.mmap_ptr = ptr;
       }
    }
@@ -282,7 +282,7 @@ webrogue_bo_destroy(struct vn_renderer *renderer, struct vn_renderer_bo *_bo)
 {
    struct webrogue_bo *bo = (struct webrogue_bo *)_bo;
 
-   webroguegfx_vulkan_resource_unref(bo->base.res_id);
+   wr4c_vulkan_resource_unref(bo->base.res_id);
 
    /* unregister then free, so the shadow mapping doesn't dangle on freed memory */
    if (bo->base.mmap_ptr)
@@ -302,7 +302,7 @@ webrogue_bo_create_from_device_memory(
 {
    struct webrogue *webrogue = (struct webrogue *)renderer;
 
-   uint32_t res_id = webroguegfx_vulkan_create_blob(NULL, size, mem_id);
+   uint32_t res_id = wr4c_vulkan_create_blob(NULL, size, mem_id);
    if (!res_id)
       return VK_ERROR_OUT_OF_HOST_MEMORY;
 
@@ -327,7 +327,7 @@ webrogue_shmem_destroy_now(struct vn_renderer *renderer,
 {
    struct webrogue_shmem *shmem = (struct webrogue_shmem *)_shmem;
 
-   webroguegfx_vulkan_resource_unref(shmem->base.res_id);
+   wr4c_vulkan_resource_unref(shmem->base.res_id);
 }
 
 static void
@@ -359,7 +359,7 @@ webrogue_shmem_create(struct vn_renderer *renderer, size_t size)
    if (!ptr)
       return NULL;
 
-   uint32_t res_id = webroguegfx_vulkan_create_blob(ptr, size_aligned, 0);
+   uint32_t res_id = wr4c_vulkan_create_blob(ptr, size_aligned, 0);
    if (!res_id) {
       free(ptr);
       return NULL;
@@ -486,7 +486,7 @@ webrogue_init_capset(struct webrogue *webrogue)
 static VkResult
 webrogue_init_params(struct webrogue *webrogue)
 {
-   uint32_t val = webroguegfx_vulkan_get_max_timeline_count();
+   uint32_t val = wr4c_vulkan_get_max_timeline_count();
    if (!val) {
       vn_log(webrogue->instance, "no timeline support");
       return VK_ERROR_INITIALIZATION_FAILED;
@@ -505,7 +505,7 @@ webrogue_init(struct webrogue *webrogue)
 
    mtx_init(&webrogue->sock_mutex, mtx_plain);
 
-   webroguegfx_vulkan_create_renderer("venus", sizeof("venus") - 1);
+   wr4c_vulkan_create_renderer("venus", sizeof("venus") - 1);
 
    VkResult result = webrogue_init_params(webrogue);
    if (result == VK_SUCCESS)
@@ -518,7 +518,7 @@ webrogue_init(struct webrogue *webrogue)
    vn_renderer_shmem_cache_init(&webrogue->shmem_cache, &webrogue->base,
                                 webrogue_shmem_destroy_now);
 
-   webroguegfx_vulkan_context_init(webrogue->capset.id);
+   wr4c_vulkan_context_init(webrogue->capset.id);
 
    webrogue_init_renderer_info(webrogue);
 
